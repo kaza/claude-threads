@@ -36,6 +36,20 @@ import { validateClaudeCli } from './claude/version-check.js';
 import { startUI, type UIProvider } from './ui/index.js';
 import { setLogHandler } from './utils/logger.js';
 import { handleMessage } from './message-handler.js';
+import { createChannelDiscoveryRuntime } from './platform/channel-discovery-runtime.js';
+import {
+  createWorktreeTracking,
+  removeWorktree,
+  hasUncommittedChanges,
+  hasUnpushedCommits,
+  commitAllWip,
+  pushCurrentBranch,
+  isSafeToRemove,
+  deleteLocalBranch,
+} from './git/worktree.js';
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
+import * as nodeOs from 'node:os';
 import { AutoUpdateManager } from './auto-update/index.js';
 import {
   loadUpdateState,
@@ -51,12 +65,12 @@ import {
 /**
  * Create a platform client based on the config type.
  */
-function createPlatformClient(config: PlatformInstanceConfig): PlatformClient {
+function createPlatformClient(config: PlatformInstanceConfig, sharedEventSource?: PlatformClient): PlatformClient {
   switch (config.type) {
     case 'mattermost':
       return new MattermostClient(config as MattermostPlatformConfig);
     case 'slack':
-      return new SlackClient(config as SlackPlatformConfig);
+      return new SlackClient(config as SlackPlatformConfig, sharedEventSource as SlackClient | undefined);
     default:
       throw new Error(`Unsupported platform type: ${(config as PlatformInstanceConfig).type}`);
   }
@@ -77,7 +91,8 @@ function wirePlatformEvents(
   client: PlatformClient,
   session: SessionManager,
   ui: UIProvider,
-  directChannelMode?: DirectChannelModeConfig
+  directChannelMode?: DirectChannelModeConfig,
+  defaultWorkingDir?: string
 ): void {
   // Handle incoming messages
   client.on('message', async (post: PlatformPost, user: PlatformUser | null) => {
@@ -88,6 +103,7 @@ function wirePlatformEvents(
     await handleMessage(client, session, post, user, {
       platformId,
       directChannelMode,
+      defaultWorkingDir,
       logger: {
         error: (msg) => ui.addLog({ level: 'error', component: '❌', message: msg }),
       },
@@ -803,6 +819,104 @@ async function startWithoutDaemon() {
       platformType: 'mattermost',
       enabled: false,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dynamic channels (Slack): derived instances for any channel the bot is
+  // @-mentioned in — spawned live sharing the parent's socket, reconstructed
+  // at boot from persisted bindings. See docs/dynamic-channels-spec.md.
+  // ---------------------------------------------------------------------------
+  for (const platformConfig of config.platforms) {
+    if (platformConfig.type !== 'slack') continue;
+    const slackCfg = platformConfig as SlackPlatformConfig;
+    if (!slackCfg.dynamicChannels) continue;
+    const parentClient = platforms.get(platformConfig.id);
+    if (!parentClient) continue;
+
+    const chRuntime = createChannelDiscoveryRuntime({
+      platforms,
+      log: (level, message) => ui.addLog({ level, component: 'chan', message }),
+      registerPlatform: (chConfig, workingDir, sharedEventSource) => {
+        // Derived channel clients share the parent's socket (the shared event
+        // source merged upstream as #502): pass it at construction, never open one.
+        const chClient = createPlatformClient(chConfig, sharedEventSource);
+        platforms.set(chConfig.id, chClient);
+        ui.setPlatformStatus(chConfig.id, {
+          displayName: chConfig.displayName,
+          botName: chConfig.botName,
+          url: 'slack.com',
+          platformType: 'slack',
+          enabled: true,
+        });
+        session.addPlatform(chConfig.id, chClient, {
+          overhead: { sessionHeader: 'minimal', stickyMessage: 'hidden' },
+          memory: resolveMemoryConfig(chConfig.memory, `chan[${chConfig.id}].memory`),
+          routinesEnabled: resolveRoutinesEnabled(chConfig.routines, `chan[${chConfig.id}].routines`),
+        });
+        wirePlatformEvents(chConfig.id, chClient, session, ui, chConfig.directChannelMode, workingDir);
+        return chClient;
+      },
+      removePlatform: (platformId, channelId) => {
+        const chClient = platforms.get(platformId);
+        platforms.delete(platformId);
+        session.removePlatform(platformId);
+        ui.removePlatformStatus(platformId);
+        (parentClient as SlackClient).unregisterChannelClient(channelId);
+        if (chClient) void Promise.resolve(chClient.disconnect()).catch(() => {});
+      },
+      deliverMessage: (chClient, post, user, chPlatformId, workingDir) =>
+        handleMessage(chClient, session, post, user, {
+          platformId: chPlatformId,
+          directChannelMode: true,
+          defaultWorkingDir: workingDir,
+          logger: { error: (msg) => ui.addLog({ level: 'error', component: '❌', message: msg }) },
+        }),
+      fetchChannelName: (channelId) => (parentClient as SlackClient).fetchChannelName(channelId),
+      listRepos: (reposDir) => {
+        try {
+          return nodeFs
+            .readdirSync(reposDir, { withFileTypes: true })
+            .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+            .map((e) => e.name);
+        } catch {
+          return [];
+        }
+      },
+      ensureWorkspace: async (ws) => {
+        if (ws.kind === 'scratch') {
+          nodeFs.mkdirSync(ws.dir, { recursive: true });
+          return;
+        }
+        if (!nodeFs.existsSync(ws.dir)) {
+          await createWorktreeTracking(ws.repoRoot!, ws.branch!, ws.dir);
+        }
+      },
+      teardownWorkspace: async (ws) => {
+        // Scratch dirs are deconfigured but never deleted.
+        if (ws.kind === 'scratch') return 'removed';
+        if (!nodeFs.existsSync(ws.dir)) return 'removed';
+        if (await hasUncommittedChanges(ws.dir)) {
+          await commitAllWip(ws.dir, `wip: archived from Slack ${new Date().toISOString()}`);
+        }
+        if (await hasUnpushedCommits(ws.dir)) {
+          await pushCurrentBranch(ws.dir);
+        }
+        // Mechanical verdict — a claim of "pushed" is not a fact.
+        if (!(await isSafeToRemove(ws.dir))) return 'kept';
+        await removeWorktree(ws.repoRoot!, ws.dir);
+        if (ws.branch) await deleteLocalBranch(ws.repoRoot!, ws.branch).catch(() => {});
+        return 'removed';
+      },
+      alert: async (message) => {
+        await parentClient.createPost(message);
+      },
+      bindingsFile: nodePath.join(
+        nodeOs.homedir(), '.config', 'claude-threads',
+        `dynamic-channels-${platformConfig.id}.json`
+      ),
+    });
+    chRuntime.wireParent(slackCfg, parentClient);
+    chRuntime.reconstructPersisted();
   }
 
   // Connect only enabled platforms

@@ -69,6 +69,11 @@ export interface MessageHandlerLogger {
  */
 export interface MessageHandlerOptions {
   platformId: string;
+  /**
+   * Default working directory for sessions started on this platform
+   * (per-platform override of the global workingDir; `!cd` still wins).
+   */
+  defaultWorkingDir?: string;
   logger?: MessageHandlerLogger;
   /**
    * Called when !kill command is executed. In production this calls process.exit(0).
@@ -467,6 +472,9 @@ export async function handleMessage(
     // Uses unified command executor with stacking support
     // ---------------------------------------------------------------------------
     const initialOptions: InitialSessionOptions = {};
+    if (options.defaultWorkingDir) {
+      initialOptions.workingDir = options.defaultWorkingDir;
+    }
     let worktreeBranch: string | undefined;
 
     // Build executor context for first-message commands

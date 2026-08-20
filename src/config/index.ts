@@ -5,6 +5,7 @@ import yaml from 'js-yaml';
 
 // Re-export all types from types.ts
 export type {
+  DynamicChannelsConfig,
   WorktreeMode,
   ThreadLogsConfig,
   LimitsConfig,

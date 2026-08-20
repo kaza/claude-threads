@@ -576,3 +576,79 @@ export async function removeWorktreeMetadata(worktreePath: string): Promise<void
     log.debug(`Removed worktree metadata for: ${worktreePath}`);
   }
 }
+
+// =============================================================================
+// Dynamic-channel teardown helpers (see docs/dynamic-channels-spec.md)
+// =============================================================================
+
+/** True if the current branch has commits its upstream doesn't. */
+export async function hasUnpushedCommits(dir: string): Promise<boolean> {
+  try {
+    const out = await execGit(['rev-list', '--count', '@{upstream}..HEAD'], dir);
+    return parseInt(out.trim(), 10) > 0;
+  } catch {
+    // No upstream configured yet — anything committed locally is unpushed.
+    try {
+      const out = await execGit(['rev-list', '--count', 'HEAD'], dir);
+      return parseInt(out.trim(), 10) > 0;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Commit ALL changes (tracked + untracked) as a WIP commit. */
+export async function commitAllWip(dir: string, message: string): Promise<void> {
+  await execGit(['add', '-A'], dir);
+  await execGit(['commit', '-m', message, '--no-verify'], dir);
+}
+
+/** Push the current branch, setting upstream if needed. */
+export async function pushCurrentBranch(dir: string): Promise<void> {
+  const branch = await getCurrentBranch(dir);
+  if (!branch) throw new Error(`No current branch in ${dir}`);
+  await execGit(['push', '--set-upstream', 'origin', branch], dir);
+}
+
+/**
+ * Mechanical safety verdict for removing a worktree: true only when the
+ * working tree is clean AND nothing is unpushed. A model claiming "all
+ * pushed" is a claim; this is the fact.
+ */
+export async function isSafeToRemove(dir: string): Promise<boolean> {
+  if (await hasUncommittedChanges(dir)) return false;
+  if (await hasUnpushedCommits(dir)) return false;
+  return true;
+}
+
+/** Delete a local branch (remote branches are never touched). */
+export async function deleteLocalBranch(repoRoot: string, branch: string): Promise<void> {
+  await execGit(['branch', '-D', branch], repoRoot);
+}
+
+/**
+ * Create a worktree for `branch`, basing a NEW branch on `origin/<branch>`
+ * when the remote already has it (the unarchive-recreate path: local branch
+ * was deleted at teardown, remote survived). Falls back to createWorktree
+ * semantics otherwise.
+ */
+export async function createWorktreeTracking(
+  repoRoot: string,
+  branch: string,
+  targetDir: string
+): Promise<string> {
+  const parentDir = path.dirname(targetDir);
+  await fs.mkdir(parentDir, { recursive: true });
+  if (await branchExists(repoRoot, branch)) {
+    await execGit(['worktree', 'add', targetDir, branch], repoRoot);
+    return targetDir;
+  }
+  try {
+    await execGit(['fetch', 'origin', branch], repoRoot);
+    await execGit(['worktree', 'add', '-b', branch, targetDir, `origin/${branch}`], repoRoot);
+    return targetDir;
+  } catch {
+    await execGit(['worktree', 'add', '-b', branch, targetDir], repoRoot);
+    return targetDir;
+  }
+}

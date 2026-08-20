@@ -373,6 +373,12 @@ export interface Config {
 
 export interface PlatformInstanceConfig {
   id: string;
+  /**
+   * Per-platform default working directory for new sessions (overrides the
+   * global `workingDir`; a first-message `!cd` still wins). Used by derived
+   * dynamic-channel instances to pin the channel to its worktree.
+   */
+  workingDir?: string;
   type: 'mattermost' | 'slack';
   displayName: string;
   /**
@@ -612,6 +618,23 @@ export interface MattermostPlatformConfig extends PlatformInstanceConfig {
   permissionMode?: PermissionMode;
   /** Outbound `send_file` settings. */
   outboundFiles?: OutboundFilesConfig;
+  /** Spawn derived instances for any channel the bot is @-mentioned in. */
+  dynamicChannels?: DynamicChannelsConfig;
+}
+
+/**
+ * Dynamic channel discovery for a Slack platform entry.
+ * See docs/dynamic-channels-spec.md.
+ */
+export interface DynamicChannelsConfig {
+  /** Directory containing candidate repos (each subdirectory is a repo). */
+  reposDir: string;
+  /** Where per-channel worktrees are created. */
+  worktreesDir: string;
+  /** Where non-repo channels get a plain working directory. */
+  scratchDir: string;
+  /** DCM setting for derived channels (default: true). */
+  directChannelMode?: DirectChannelModeConfig;
 }
 
 export interface SlackPlatformConfig extends PlatformInstanceConfig {
@@ -632,4 +655,6 @@ export interface SlackPlatformConfig extends PlatformInstanceConfig {
   apiUrl?: string;
   /** Outbound `send_file` settings. */
   outboundFiles?: OutboundFilesConfig;
+  /** Spawn derived instances for any channel the bot is @-mentioned in. */
+  dynamicChannels?: DynamicChannelsConfig;
 }

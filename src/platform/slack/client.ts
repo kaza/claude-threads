@@ -1,5 +1,5 @@
 import { WebSocket } from '../../utils/websocket.js';
-import type { SlackPlatformConfig } from '../../config/index.js';
+import type { DynamicChannelsConfig, SlackPlatformConfig } from '../../config/index.js';
 import { wsLogger, createLogger } from '../../utils/logger.js';
 import { truncateMessageSafely, escapeRegExp, getEmojiName, formatWebSocketError, resolvePostThreadId, isDcmThreadId, normalizeAckReaction, resolveDirectChannelMode, type ResolvedDirectChannelMode, type ApprovalsMode } from '../utils.js';
 import { BasePlatformClient } from '../base-client.js';
@@ -81,6 +81,10 @@ export class SlackClient extends BasePlatformClient {
 
   private outboundFiles?: { enabled?: boolean; maxBytes?: number };
 
+  // --- Dynamic channels (see docs/dynamic-channels-spec.md) ---
+  /** Parent-side: config enabling cold-channel discovery. */
+  private dynamicChannels?: DynamicChannelsConfig;
+
   private readonly formatter = new SlackFormatter();
 
   // Shared event source: when several SlackClient instances serve one Slack
@@ -107,6 +111,7 @@ export class SlackClient extends BasePlatformClient {
     this.directChannelMode = resolveDirectChannelMode(platformConfig.directChannelMode);
     this.approvals = platformConfig.approvals;
     this.ackReaction = normalizeAckReaction(platformConfig.ackReaction, `platforms[${platformConfig.id}].ackReaction`);
+    this.dynamicChannels = platformConfig.dynamicChannels;
   }
 
   // ============================================================================
@@ -210,6 +215,20 @@ export class SlackClient extends BasePlatformClient {
       return super.disconnect();
     } finally {
       this.installStateMirror();
+    }
+  }
+
+  /** Channel name lookup (used by channel discovery). */
+  async fetchChannelName(channelId: string): Promise<string | null> {
+    try {
+      const resp = await this.api<{ ok: boolean; channel?: { name?: string } }>(
+        'GET',
+        `conversations.info?channel=${channelId}`
+      );
+      return resp.channel?.name ?? null;
+    } catch (err) {
+      log.warn(`conversations.info failed for ${channelId}: ${err}`);
+      return null;
     }
   }
 
@@ -578,17 +597,60 @@ export class SlackClient extends BasePlatformClient {
     bot_id?: string;
     files?: SlackFile[];
   }): void {
-    // Shared event source: this socket may carry events for channels owned by
-    // registered secondary clients — hand those over before any own-channel
-    // filtering. Events for unregistered foreign channels keep the existing
-    // behavior (dropped below by the own-channel checks).
+    // --- Dynamic channels: parent-side routing (before any own-channel filter) ---
     const eventChannel = event.channel || event.item?.channel;
     if (eventChannel && eventChannel !== this.channelId) {
-      const secondary = this.channelClients.get(eventChannel);
-      if (secondary) {
-        secondary._injectSlackEvent(event);
+      const derived = this.channelClients.get(eventChannel);
+      if (derived) {
+        derived._injectSlackEvent(event);
         return;
       }
+      // Channel lifecycle for channels we don't own and have no derived
+      // client for: nothing to do.
+      if (
+        this.dynamicChannels &&
+        event.type === 'message' &&
+        (!event.subtype || event.subtype === 'file_share') &&
+        event.user !== this.botUserId &&
+        !event.bot_id &&
+        event.text &&
+        this.botUserId &&
+        event.text.includes(`<@${this.botUserId}>`)
+      ) {
+        // Cold channel: an @-mention in a channel nobody owns yet.
+        if (event.ts && this.processedMessages.has(`cold:${eventChannel}:${event.ts}`)) return;
+        if (event.ts) this.processedMessages.add(`cold:${eventChannel}:${event.ts}`);
+        const message: SlackMessage = {
+          type: 'message',
+          ts: event.ts || '',
+          user: event.user,
+          text: event.text || '',
+          thread_ts: event.thread_ts,
+          files: event.files,
+        };
+        const post = this.normalizePlatformPost(message, eventChannel);
+        this.getUser(event.user || '')
+          .then((user) => this.emit('cold_channel_message', eventChannel, post, user))
+          .catch(() => this.emit('cold_channel_message', eventChannel, post, null));
+      }
+      return;
+    }
+
+    // --- Dynamic channels: lifecycle events (archive / bot removed) ---
+    if (event.type === 'channel_archive' && event.channel) {
+      const target = this.channelClients.has(event.channel)
+        ? event.channel
+        : event.channel === this.channelId && this.sharedEventSource
+          ? event.channel
+          : null;
+      if (target) this.emit('channel_gone', target, 'archived');
+      return;
+    }
+    if (event.type === 'member_left_channel' && event.channel && event.user === this.botUserId) {
+      if (this.channelClients.has(event.channel) || (event.channel === this.channelId && this.sharedEventSource)) {
+        this.emit('channel_gone', event.channel, 'bot_removed');
+      }
+      return;
     }
 
     // Handle message events

@@ -30,6 +30,18 @@ export interface PlatformClientEvents {
    * The listener decides whether to spawn a derived platform instance.
    */
   direct_message: (post: PlatformPost, user: PlatformUser | null) => void;
+  /**
+   * Emitted by a Slack parent with `dynamicChannels` for a bot-@mention in a
+   * channel that no configured or derived instance owns. The listener decides
+   * whether to spawn a derived channel instance. (Slack only.)
+   */
+  cold_channel_message: (channelId: string, post: PlatformPost, user: PlatformUser | null) => void;
+  /**
+   * Emitted by a Slack parent when a channel owned by a derived instance is
+   * archived or the bot is removed from it. Triggers the teardown backstop.
+   * (Slack only.)
+   */
+  channel_gone: (channelId: string, reason: 'archived' | 'bot_removed') => void;
 }
 
 /**
