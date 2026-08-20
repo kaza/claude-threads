@@ -56,18 +56,25 @@ On `channel_archive`, or the bot being removed from the channel:
 4. push verified clean (`status --porcelain` empty, `rev-list @{u}..HEAD` empty)
    → `git worktree remove` + delete local branch. Remote branch always kept.
 5. push fails → keep everything, post ⚠️ to the parent channel.
-6. `channel_unarchive` or re-mention later → binding recreates the worktree
-   from the remote branch. Archive is a two-way door.
+6. Un-archive the channel and @-mention the bot again → the binding
+   recreates the worktree from the remote branch. Archive is a two-way door.
+   (No `channel_unarchive` handling — the re-mention IS the recovery path.)
 
 Principle: remote branch = durable store; worktree = rebuildable cache.
 
 ## Slack app requirements
 
-Bot events additionally needed: `channel_archive`, `channel_unarchive`,
-`member_left_channel`. Scopes unchanged.
+Bot events additionally needed: `channel_archive`, `member_left_channel`.
+(`member_left_channel` pulls in `groups:read`.)
 
 ## Non-features (deliberate)
 
 - No time-based expiry; disk pressure is an alarm, not a reaper.
 - No remote-branch deletion, ever.
 - No channel creation/archiving by the bot (no channels:manage).
+
+## Known limitations (v1)
+
+- Messages posted in a *derived* channel while the parent socket is down are
+  not replayed by reconnect recovery (which only covers the parent channel).
+  Routing resumes for new messages; a missed instruction needs re-sending.

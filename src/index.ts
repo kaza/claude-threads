@@ -39,6 +39,7 @@ import { handleMessage } from './message-handler.js';
 import { createChannelDiscoveryRuntime } from './platform/channel-discovery-runtime.js';
 import {
   createWorktreeTracking,
+  fetchCurrentBranch,
   removeWorktree,
   hasUncommittedChanges,
   hasUnpushedCommits,
@@ -856,7 +857,12 @@ async function startWithoutDaemon() {
         wirePlatformEvents(chConfig.id, chClient, session, ui, chConfig.directChannelMode, workingDir);
         return chClient;
       },
-      removePlatform: (platformId, channelId) => {
+      removePlatform: async (platformId, channelId) => {
+        // Kill running sessions FIRST — the teardown verifier is about to
+        // commit and remove this worktree, and doing that under a live
+        // Claude process is a race (review finding).
+        const active = session.registry.getAll().filter((s) => s.platformId === platformId);
+        await Promise.allSettled(active.map((s) => session.killSession(s.threadId)));
         const chClient = platforms.get(platformId);
         platforms.delete(platformId);
         session.removePlatform(platformId);
@@ -898,6 +904,9 @@ async function startWithoutDaemon() {
         if (await hasUncommittedChanges(ws.dir)) {
           await commitAllWip(ws.dir, `wip: archived from Slack ${new Date().toISOString()}`);
         }
+        // Refresh the tracking ref first — "pushed" verified against a stale
+        // upstream can delete the last copy (review finding).
+        await fetchCurrentBranch(ws.dir).catch(() => {});
         if (await hasUnpushedCommits(ws.dir)) {
           await pushCurrentBranch(ws.dir);
         }
@@ -915,8 +924,15 @@ async function startWithoutDaemon() {
         `dynamic-channels-${platformConfig.id}.json`
       ),
     });
+    // Channels owned by static sibling entries must never be treated as cold.
+    (parentClient as SlackClient).setKnownStaticChannels(
+      config.platforms
+        .filter((p) => p.type === 'slack' && p.id !== platformConfig.id)
+        .map((p) => (p as SlackPlatformConfig).channelId),
+    );
     chRuntime.wireParent(slackCfg, parentClient);
-    chRuntime.reconstructPersisted();
+    // Await: platforms must exist before session.initialize() resumes them.
+    await chRuntime.reconstructPersisted();
   }
 
   // Connect only enabled platforms

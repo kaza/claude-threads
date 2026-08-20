@@ -41,6 +41,12 @@ describe('resolveChannelWorkspace', () => {
     expect(ws.kind).toBe('scratch');
   });
 
+  it('rejects unsafe channel names', () => {
+    expect(() => resolveChannelWorkspace('../etc', cfg, repos)).toThrow(/unsafe/);
+    expect(() => resolveChannelWorkspace('a/..b', cfg, repos)).toThrow(/unsafe/);
+    expect(() => resolveChannelWorkspace('.hidden', cfg, repos)).toThrow(/unsafe/);
+  });
+
   it('no repo prefix → scratch dir', () => {
     const ws = resolveChannelWorkspace('random-idea', cfg, repos);
     expect(ws).toEqual({ kind: 'scratch', dir: '/s/random-idea' });

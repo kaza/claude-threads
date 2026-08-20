@@ -84,6 +84,8 @@ export class SlackClient extends BasePlatformClient {
   // --- Dynamic channels (see docs/dynamic-channels-spec.md) ---
   /** Parent-side: config enabling cold-channel discovery. */
   private dynamicChannels?: DynamicChannelsConfig;
+  /** Parent-side: channels owned by static sibling config entries (same app). */
+  private knownStaticChannels = new Set<string>();
 
   private readonly formatter = new SlackFormatter();
 
@@ -117,6 +119,20 @@ export class SlackClient extends BasePlatformClient {
   // ============================================================================
   // Shared event source plumbing
   // ============================================================================
+
+  /** Parent-side: channels that belong to static sibling entries — never cold. */
+  setKnownStaticChannels(channelIds: string[]): void {
+    this.knownStaticChannels = new Set(channelIds);
+  }
+
+  /**
+   * Mark a message ts as already handled (P1: the cold trigger is delivered
+   * manually by the discovery runtime; a Slack redelivery of the same
+   * envelope would otherwise reach the derived client unseen and run twice).
+   */
+  seedProcessedMessage(ts: string): void {
+    this.processedMessages.add(ts);
+  }
 
   /**
    * A secondary's only event feed is the parent's socket, so the parent's
@@ -597,9 +613,31 @@ export class SlackClient extends BasePlatformClient {
     bot_id?: string;
     files?: SlackFile[];
   }): void {
+    // --- Dynamic channels: lifecycle events FIRST (P0: these must be seen by
+    // the PARENT, whose 'channel_gone' the runtime listens on — routing them
+    // into the derived client would make teardown unreachable) ---
+    if (event.type === 'channel_archive' && event.channel) {
+      if (this.channelClients.has(event.channel)) {
+        this.emit('channel_gone', event.channel, 'archived');
+      }
+      return;
+    }
+    if (event.type === 'member_left_channel' && event.channel && event.user === this.botUserId) {
+      if (this.channelClients.has(event.channel)) {
+        this.emit('channel_gone', event.channel, 'bot_removed');
+      }
+      return;
+    }
+
     // --- Dynamic channels: parent-side routing (before any own-channel filter) ---
     const eventChannel = event.channel || event.item?.channel;
     if (eventChannel && eventChannel !== this.channelId) {
+      // A channel owned by a STATIC sibling entry (same Slack app, its own
+      // socket): drop silently — round-robin delivered it to the wrong
+      // connection, and treating it as cold would split ownership.
+      if (this.knownStaticChannels.has(eventChannel)) {
+        return;
+      }
       const derived = this.channelClients.get(eventChannel);
       if (derived) {
         derived._injectSlackEvent(event);
@@ -619,7 +657,13 @@ export class SlackClient extends BasePlatformClient {
       ) {
         // Cold channel: an @-mention in a channel nobody owns yet.
         if (event.ts && this.processedMessages.has(`cold:${eventChannel}:${event.ts}`)) return;
-        if (event.ts) this.processedMessages.add(`cold:${eventChannel}:${event.ts}`);
+        if (event.ts) {
+          this.processedMessages.add(`cold:${eventChannel}:${event.ts}`);
+          if (this.processedMessages.size > this.MAX_PROCESSED_MESSAGES) {
+            const first = this.processedMessages.values().next().value;
+            if (first) this.processedMessages.delete(first);
+          }
+        }
         const message: SlackMessage = {
           type: 'message',
           ts: event.ts || '',
@@ -632,23 +676,6 @@ export class SlackClient extends BasePlatformClient {
         this.getUser(event.user || '')
           .then((user) => this.emit('cold_channel_message', eventChannel, post, user))
           .catch(() => this.emit('cold_channel_message', eventChannel, post, null));
-      }
-      return;
-    }
-
-    // --- Dynamic channels: lifecycle events (archive / bot removed) ---
-    if (event.type === 'channel_archive' && event.channel) {
-      const target = this.channelClients.has(event.channel)
-        ? event.channel
-        : event.channel === this.channelId && this.sharedEventSource
-          ? event.channel
-          : null;
-      if (target) this.emit('channel_gone', target, 'archived');
-      return;
-    }
-    if (event.type === 'member_left_channel' && event.channel && event.user === this.botUserId) {
-      if (this.channelClients.has(event.channel) || (event.channel === this.channelId && this.sharedEventSource)) {
-        this.emit('channel_gone', event.channel, 'bot_removed');
       }
       return;
     }

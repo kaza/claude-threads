@@ -652,3 +652,10 @@ export async function createWorktreeTracking(
     return targetDir;
   }
 }
+
+/** Refresh the current branch's tracking ref from origin (best effort). */
+export async function fetchCurrentBranch(dir: string): Promise<void> {
+  const branch = await getCurrentBranch(dir);
+  if (!branch) return;
+  await execGit(['fetch', 'origin', branch], dir);
+}

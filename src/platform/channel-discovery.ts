@@ -43,11 +43,24 @@ export interface ChannelWorkspace {
  * repo; the remainder (sans leading '-') is the task slug and names the
  * branch `slack/<slug>`. No match → a plain scratch directory.
  */
+/**
+ * Slack constrains channel names to lowercase alphanumerics, '-', '_' and
+ * '.' — but we build filesystem paths and branch names from them, so we
+ * enforce it ourselves. Anything else (or path-traversal shapes) throws.
+ */
+export function sanitizeChannelName(name: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name) || name.includes('..')) {
+    throw new Error(`Refusing unsafe channel name: ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
 export function resolveChannelWorkspace(
   channelName: string,
   cfg: { reposDir: string; worktreesDir: string; scratchDir: string },
   repoNames: string[],
 ): ChannelWorkspace {
+  channelName = sanitizeChannelName(channelName);
   const sorted = [...repoNames].sort((a, b) => b.length - a.length);
   const repo = sorted.find(
     (r) => channelName === r || channelName.startsWith(`${r}-`),

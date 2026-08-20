@@ -37,10 +37,18 @@ export interface ChannelDiscoveryDeps {
   /**
    * Create, register (UI + session manager + event wiring incl.
    * defaultWorkingDir) and return the client for a derived channel config.
+   * MUST also insert the client into `platforms` — the runtime uses
+   * `platforms.has(platformId)` as the liveness check for respawn decisions.
    */
   registerPlatform: (config: SlackPlatformConfig, workingDir: string, sharedEventSource: PlatformClient) => PlatformClient;
-  /** Tear a derived platform down host-side (session mgr, UI row, parent routing). */
-  removePlatform: (platformId: string, channelId: string) => void;
+  /**
+   * Tear a derived platform down host-side (kill its running sessions,
+   * session mgr, UI row, parent routing). MUST have stopped any running
+   * Claude session before resolving — the workspace verifier commits and
+   * removes the worktree right after, and doing that under a live process
+   * is a race.
+   */
+  removePlatform: (platformId: string, channelId: string) => void | Promise<void>;
   /** Deliver the triggering message through the production handler. */
   deliverMessage: (
     client: PlatformClient,
@@ -68,8 +76,12 @@ export interface ChannelDiscoveryDeps {
 
 export interface ChannelDiscoveryRuntime {
   wireParent(parentConfig: SlackPlatformConfig, parentClient: PlatformClient): void;
-  /** Rebuild derived instances from persisted bindings (call before connect). */
-  reconstructPersisted(): void;
+  /**
+   * Rebuild derived instances from persisted bindings. MUST be awaited before
+   * session.initialize() — a platform that registers late misses its
+   * session resume (review finding).
+   */
+  reconstructPersisted(): Promise<void>;
   /** Current bindings (for tests / status). */
   bindings(): ReadonlyMap<string, ChannelBinding>;
 }
@@ -119,6 +131,12 @@ export function createChannelDiscoveryRuntime(deps: ChannelDiscoveryDeps): Chann
     // Share the parent's socket (never open a second one): the parent is a
     // constructor argument of the derived client, per the upstream shared event source.
     const client = deps.registerPlatform(config, binding.workspace.dir, parent.client);
+    if (coldPost) {
+      // The cold trigger is delivered manually below; seed the derived
+      // client's dedupe so a Slack redelivery can't run the prompt twice.
+      (client as PlatformClient & { seedProcessedMessage?: (ts: string) => void })
+        .seedProcessedMessage?.(coldPost.id);
+    }
     await client.connect();
     byChannel.set(binding.channelId, binding);
     saveBindings();
@@ -134,9 +152,18 @@ export function createChannelDiscoveryRuntime(deps: ChannelDiscoveryDeps): Chann
     user: PlatformUser | null,
   ): Promise<void> => {
     if (!parent) return;
-    if (byChannel.has(channelId) || inFlight.has(channelId)) return;
+    if (inFlight.has(channelId)) return;
+    // A binding whose platform is actually live → nothing to do. A binding
+    // whose platform is MISSING (failed boot reconstruction, crashed spawn)
+    // must not poison the channel forever — respawn it (review finding).
+    const existing = byChannel.get(channelId);
+    if (existing && deps.platforms.has(existing.platformId)) return;
     inFlight.add(channelId);
     try {
+      if (existing) {
+        await spawn(existing, post, user);
+        return;
+      }
       const name = (await deps.fetchChannelName(channelId)) ?? channelId.toLowerCase();
       const dyn = parent.config.dynamicChannels;
       if (!dyn) return;
@@ -160,7 +187,7 @@ export function createChannelDiscoveryRuntime(deps: ChannelDiscoveryDeps): Chann
     const binding = byChannel.get(channelId);
     if (!binding) return;
     log('info', `dynamic-channels: #${binding.channelName} ${reason} — tearing down ${binding.platformId}`);
-    deps.removePlatform(binding.platformId, binding.channelId);
+    await deps.removePlatform(binding.platformId, binding.channelId);
     byChannel.delete(channelId);
     saveBindings();
     try {
@@ -186,13 +213,15 @@ export function createChannelDiscoveryRuntime(deps: ChannelDiscoveryDeps): Chann
         void onChannelGone(channelId, reason);
       });
     },
-    reconstructPersisted() {
+    async reconstructPersisted() {
       loadBindings();
-      for (const binding of byChannel.values()) {
-        spawn(binding).catch((err) =>
-          log('error', `dynamic-channels: boot reconstruction failed for #${binding.channelName}: ${err}`),
-        );
-      }
+      await Promise.allSettled(
+        [...byChannel.values()].map((binding) =>
+          spawn(binding).catch((err) =>
+            log('error', `dynamic-channels: boot reconstruction failed for #${binding.channelName}: ${err}`),
+          ),
+        ),
+      );
     },
     bindings() {
       return byChannel;

@@ -58,6 +58,8 @@ function makeDeps(overrides: Partial<ChannelDiscoveryDeps> = {}) {
       registered.push({ id: config.id, workingDir });
       const c = new FakeClient();
       clients.set(config.id, c);
+      // Contract: registerPlatform inserts into the live platform registry.
+      deps.platforms.set(config.id, c as unknown as PlatformClient);
       return c as unknown as PlatformClient;
     },
     removePlatform: (platformId) => { removed.push(platformId); },
@@ -140,7 +142,7 @@ describe('channel discovery runtime', () => {
     const rt2 = createChannelDiscoveryRuntime(second.deps);
     const parent2 = new FakeClient();
     rt2.wireParent(parentConfig, parent2 as unknown as PlatformClient);
-    rt2.reconstructPersisted();
+    await rt2.reconstructPersisted();
     await flush();
 
     expect(second.registered.length).toBe(1);
