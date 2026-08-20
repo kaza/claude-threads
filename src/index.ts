@@ -93,7 +93,8 @@ function wirePlatformEvents(
   session: SessionManager,
   ui: UIProvider,
   directChannelMode?: DirectChannelModeConfig,
-  defaultWorkingDir?: string
+  defaultWorkingDir?: string,
+  defaultPermissionMode?: PermissionMode
 ): void {
   // Handle incoming messages
   client.on('message', async (post: PlatformPost, user: PlatformUser | null) => {
@@ -105,6 +106,7 @@ function wirePlatformEvents(
       platformId,
       directChannelMode,
       defaultWorkingDir,
+      defaultPermissionMode,
       logger: {
         error: (msg) => ui.addLog({ level: 'error', component: '❌', message: msg }),
       },
@@ -857,7 +859,7 @@ async function startWithoutDaemon() {
           memory: resolveMemoryConfig(chConfig.memory, `chan[${chConfig.id}].memory`),
           routinesEnabled: resolveRoutinesEnabled(chConfig.routines, `chan[${chConfig.id}].routines`),
         });
-        wirePlatformEvents(chConfig.id, chClient, session, ui, chConfig.directChannelMode, workingDir);
+        wirePlatformEvents(chConfig.id, chClient, session, ui, chConfig.directChannelMode, workingDir, chConfig.permissionMode);
         return chClient;
       },
       removePlatform: async (platformId, channelId) => {
@@ -878,6 +880,7 @@ async function startWithoutDaemon() {
           platformId: chPlatformId,
           directChannelMode: true,
           defaultWorkingDir: workingDir,
+          defaultPermissionMode: 'bypass',
           logger: { error: (msg) => ui.addLog({ level: 'error', component: '❌', message: msg }) },
         }),
       fetchChannelName: (channelId) => (parentClient as SlackClient).fetchChannelName(channelId),

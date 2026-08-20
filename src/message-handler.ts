@@ -17,6 +17,7 @@ import {
   COMMAND_REGISTRY,
   type CommandExecutorContext,
 } from './commands/index.js';
+import type { PermissionMode } from './config/index.js';
 import type { InitialSessionOptions } from './session/types.js';
 import { logSilentError } from './utils/error-handler/index.js';
 import { dcmThreadId, isDcmThreadId, resolveAckReaction, resolveApprovals, resolveDirectChannelMode, type DirectChannelModeConfig } from './platform/utils.js';
@@ -74,6 +75,12 @@ export interface MessageHandlerOptions {
    * (per-platform override of the global workingDir; `!cd` still wins).
    */
   defaultWorkingDir?: string;
+  /**
+   * Default permission mode for sessions started on this platform
+   * (per-platform override of the bot-wide default; `!permissions` in the
+   * first message still wins).
+   */
+  defaultPermissionMode?: PermissionMode;
   logger?: MessageHandlerLogger;
   /**
    * Called when !kill command is executed. In production this calls process.exit(0).
@@ -474,6 +481,9 @@ export async function handleMessage(
     const initialOptions: InitialSessionOptions = {};
     if (options.defaultWorkingDir) {
       initialOptions.workingDir = options.defaultWorkingDir;
+    }
+    if (options.defaultPermissionMode) {
+      initialOptions.permissionMode = options.defaultPermissionMode;
     }
     let worktreeBranch: string | undefined;
 
