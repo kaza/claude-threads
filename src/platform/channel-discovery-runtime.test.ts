@@ -69,6 +69,8 @@ function makeDeps(overrides: Partial<ChannelDiscoveryDeps> = {}) {
     ensureWorkspace: async () => {},
     teardownWorkspace: async () => 'removed' as const,
     alert: async (m) => { alerts.push(m); },
+    listExtraWorkspaces: () => [],
+    clearExtraWorkspaces: () => {},
     bindingsFile: path.join(tmp, 'bindings.json'),
     ...overrides,
   };
@@ -127,6 +129,37 @@ describe('channel discovery runtime', () => {
     expect(alerts.length).toBe(1);
     expect(alerts[0]).toContain('nothing was deleted');
     expect(rt.bindings().size).toBe(0);
+  });
+
+  it('teardown covers workon-recorded extra workspaces and clears only removed ones', async () => {
+    const torn: string[] = [];
+    const cleared: Array<{ ch: string; dirs: string[] }> = [];
+    const { deps, alerts } = makeDeps({
+      teardownWorkspace: async (ws) => {
+        torn.push(ws.dir);
+        return ws.dir.endsWith('--stuck') ? ('kept' as const) : ('removed' as const);
+      },
+      listExtraWorkspaces: () => [
+        { kind: 'repo', dir: '/w/ch--vvs-handbook', repoRoot: '/r/vvs-handbook', branch: 'slack/x' },
+        { kind: 'repo', dir: '/w/ch--stuck', repoRoot: '/r/vvs-handbook', branch: 'slack/y' },
+      ],
+      clearExtraWorkspaces: (ch, dirs) => { cleared.push({ ch, dirs }); },
+    });
+    const rt = createChannelDiscoveryRuntime(deps);
+    const parent = new FakeClient();
+    rt.wireParent(parentConfig, parent as unknown as PlatformClient);
+    parent.emit('cold_channel_message', 'CNEW1', makePost('CNEW1'), null);
+    await flush();
+    parent.emit('channel_gone', 'CNEW1', 'archived');
+    await flush();
+
+    // primary + both extras all attempted
+    expect(torn.length).toBe(3);
+    // only the successfully removed extra is cleared from the sidecar
+    expect(cleared).toEqual([{ ch: 'vvs-handbook-cnew1', dirs: ['/w/ch--vvs-handbook'] }]);
+    // the stuck one produced an alert and was kept
+    expect(alerts.length).toBe(1);
+    expect(alerts[0]).toContain('--stuck');
   });
 
   it('boot reconstruction respawns instances from the bindings file', async () => {

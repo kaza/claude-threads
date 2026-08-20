@@ -643,14 +643,23 @@ export async function createWorktreeTracking(
     await execGit(['worktree', 'add', targetDir, branch], repoRoot);
     return targetDir;
   }
+  // Remote branch survives a previous teardown: resume from it.
   try {
     await execGit(['fetch', 'origin', branch], repoRoot);
     await execGit(['worktree', 'add', '-b', branch, targetDir, `origin/${branch}`], repoRoot);
     return targetDir;
   } catch {
-    await execGit(['worktree', 'add', '-b', branch, targetDir], repoRoot);
-    return targetDir;
+    /* no remote branch — fall through to a fresh base */
   }
+  // Fresh branch: base on a FETCHED origin default, never a stale local ref.
+  const defaultBranch = await getDefaultBranch(repoRoot);
+  try {
+    await execGit(['fetch', 'origin', defaultBranch], repoRoot);
+    await execGit(['worktree', 'add', '-b', branch, targetDir, `origin/${defaultBranch}`], repoRoot);
+  } catch {
+    await execGit(['worktree', 'add', '-b', branch, targetDir], repoRoot);
+  }
+  return targetDir;
 }
 
 /** Refresh the current branch's tracking ref from origin (best effort). */

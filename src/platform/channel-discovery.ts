@@ -97,6 +97,7 @@ export function deriveChannelPlatformConfig(
     channelId,
     workingDir,
     directChannelMode: parent.dynamicChannels?.directChannelMode ?? true,
+    permissionMode: parent.dynamicChannels?.permissionMode ?? 'bypass',
     stickyMessage: 'hidden',
     sessionHeader: 'minimal',
     // The derived instance must not re-discover channels itself.

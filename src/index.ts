@@ -833,6 +833,9 @@ async function startWithoutDaemon() {
     if (!slackCfg.dynamicChannels) continue;
     const parentClient = platforms.get(platformConfig.id);
     if (!parentClient) continue;
+    const extraWorkspacesFile = nodePath.join(
+      nodeOs.homedir(), '.config', 'claude-threads', 'dynamic-channels-extra.json'
+    );
 
     const chRuntime = createChannelDiscoveryRuntime({
       platforms,
@@ -891,6 +894,42 @@ async function startWithoutDaemon() {
       ensureWorkspace: async (ws) => {
         if (ws.kind === 'scratch') {
           nodeFs.mkdirSync(ws.dir, { recursive: true });
+          // Discovery: Claude Code auto-loads CLAUDE.md from its cwd. Only in
+          // scratch dirs — writing into a repo worktree would dirty it and get
+          // WIP-committed into the repo at teardown.
+          const claudeMd = nodePath.join(ws.dir, 'CLAUDE.md');
+          if (!nodeFs.existsSync(claudeMd)) {
+            const repos = (() => {
+              try {
+                return nodeFs
+                  .readdirSync(slackCfg.dynamicChannels!.reposDir, { withFileTypes: true })
+                  .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+                  .map((e) => e.name);
+              } catch { return []; }
+            })();
+            nodeFs.writeFileSync(claudeMd, [
+              '# Task channel workspace',
+              '',
+              'This Slack channel is one task; this scratch directory is its default',
+              'workspace. Company repos are checked out under',
+              `\`${slackCfg.dynamicChannels!.reposDir}\` — you may READ them freely, but`,
+              '**never edit the pristine clones directly**.',
+              '',
+              'To write to a repo, request a dedicated worktree for this task:',
+              '',
+              '```bash',
+              'workon <repo>           # e.g. workon ' + (repos[0] ?? 'some-repo'),
+              '```',
+              '',
+              `Available repos: ${repos.join(', ') || '(none found)'}.`,
+              'The worktree is created on branch `slack/<channel>` from a fresh',
+              'origin default; edit there by absolute path, commit, push, and open',
+              'a PR with `gh pr create`. When the task is done, say so and a human',
+              'archives the channel — everything committed and pushed survives;',
+              'the worktrees are then verified and cleaned up automatically.',
+              '',
+            ].join('\n'));
+          }
           return;
         }
         if (!nodeFs.existsSync(ws.dir)) {
@@ -918,6 +957,25 @@ async function startWithoutDaemon() {
       },
       alert: async (message) => {
         await parentClient.createPost(message);
+      },
+      listExtraWorkspaces: (channelName) => {
+        try {
+          const raw = nodeFs.readFileSync(extraWorkspacesFile, 'utf-8');
+          const data = JSON.parse(raw) as Record<string, Array<{ kind: 'repo' | 'scratch'; dir: string; repoRoot?: string; branch?: string }>>;
+          return data[channelName] ?? [];
+        } catch { return []; }
+      },
+      clearExtraWorkspaces: (channelName, handledDirs) => {
+        try {
+          const raw = nodeFs.readFileSync(extraWorkspacesFile, 'utf-8');
+          const data = JSON.parse(raw) as Record<string, Array<{ dir: string }>>;
+          const remaining = (data[channelName] ?? []).filter((w) => !handledDirs.includes(w.dir));
+          if (remaining.length === 0) delete data[channelName];
+          else data[channelName] = remaining as never;
+          const tmp = `${extraWorkspacesFile}.tmp`;
+          nodeFs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+          nodeFs.renameSync(tmp, extraWorkspacesFile);
+        } catch { /* nothing recorded — nothing to clear */ }
       },
       bindingsFile: nodePath.join(
         nodeOs.homedir(), '.config', 'claude-threads',

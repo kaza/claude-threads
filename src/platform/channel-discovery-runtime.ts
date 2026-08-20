@@ -70,6 +70,13 @@ export interface ChannelDiscoveryDeps {
   teardownWorkspace: (ws: ChannelWorkspace) => Promise<'removed' | 'kept'>;
   /** Post an operator-visible warning into the parent channel. */
   alert: (message: string) => Promise<void>;
+  /**
+   * Extra workspaces the `workon` script recorded for a channel (sidecar
+   * file; the daemon only reads it). Keyed by channel NAME.
+   */
+  listExtraWorkspaces: (channelName: string) => ChannelWorkspace[];
+  /** Clear handled sidecar entries (only the dirs actually removed). */
+  clearExtraWorkspaces: (channelName: string, handledDirs: string[]) => void;
   /** Path of the bindings JSON file. */
   bindingsFile: string;
 }
@@ -190,16 +197,29 @@ export function createChannelDiscoveryRuntime(deps: ChannelDiscoveryDeps): Chann
     await deps.removePlatform(binding.platformId, binding.channelId);
     byChannel.delete(channelId);
     saveBindings();
-    try {
-      const verdict = await deps.teardownWorkspace(binding.workspace);
-      if (verdict === 'kept') {
-        await deps.alert(
-          `⚠️ #${binding.channelName} ${reason}: workspace could not be safely removed (push failed or dirty state persisted). Kept at ${binding.workspace.dir} — nothing was deleted.`,
-        ).catch(() => {});
+    // Primary workspace plus everything `workon` recorded for this channel.
+    const extras = deps.listExtraWorkspaces(binding.channelName);
+    const all = [binding.workspace, ...extras];
+    const removedExtraDirs: string[] = [];
+    const kept: string[] = [];
+    for (const ws of all) {
+      try {
+        const verdict = await deps.teardownWorkspace(ws);
+        if (verdict === 'removed') {
+          if (ws !== binding.workspace) removedExtraDirs.push(ws.dir);
+        } else {
+          kept.push(ws.dir);
+        }
+      } catch (err) {
+        log('error', `dynamic-channels: teardown error for #${binding.channelName} (${ws.dir}): ${err}`);
+        kept.push(ws.dir);
       }
-    } catch (err) {
-      log('error', `dynamic-channels: teardown error for #${binding.channelName}: ${err}`);
-      await deps.alert(`⚠️ teardown error for #${binding.channelName}: ${err}. Workspace kept.`).catch(() => {});
+    }
+    deps.clearExtraWorkspaces(binding.channelName, removedExtraDirs);
+    if (kept.length > 0) {
+      await deps.alert(
+        `⚠️ #${binding.channelName} ${reason}: ${kept.length} workspace(s) could not be safely removed (push failed or dirty state persisted). Kept: ${kept.join(', ')} — nothing was deleted.`,
+      ).catch(() => {});
     }
   };
 

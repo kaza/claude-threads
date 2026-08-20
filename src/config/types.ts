@@ -635,6 +635,12 @@ export interface DynamicChannelsConfig {
   scratchDir: string;
   /** DCM setting for derived channels (default: true). */
   directChannelMode?: DirectChannelModeConfig;
+  /**
+   * Permission mode for derived channel sessions (default: 'bypass' — a task
+   * channel is an autonomous workspace; the human gate is conversational,
+   * not a prompt per tool call).
+   */
+  permissionMode?: PermissionMode;
 }
 
 export interface SlackPlatformConfig extends PlatformInstanceConfig {

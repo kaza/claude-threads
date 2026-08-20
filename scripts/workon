@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# workon <repo> [branch] — request a writable worktree for a dynamic-channel task.
+#
+# Creates <WORKTREES_DIR>/<channel>--<repo> on branch slack/<channel> (or the
+# given branch), based on origin/<default-branch> after a fetch, and records it
+# in the sidecar file the claude-threads daemon reads at channel teardown.
+# The channel is derived from the current workspace directory's basename.
+#
+# Env (defaults fit the herder layout):
+#   WORKON_REPOS_DIR      (~/repos)      WORKON_WORKTREES_DIR (~/worktrees)
+#   WORKON_SIDECAR        (~/.config/claude-threads/dynamic-channels-extra.json)
+set -euo pipefail
+
+REPOS_DIR="${WORKON_REPOS_DIR:-$HOME/repos}"
+WORKTREES_DIR="${WORKON_WORKTREES_DIR:-$HOME/worktrees}"
+SIDECAR="${WORKON_SIDECAR:-$HOME/.config/claude-threads/dynamic-channels-extra.json}"
+
+repo="${1:-}"; branch="${2:-}"
+if [ -z "$repo" ]; then
+  echo "usage: workon <repo> [branch]"; echo "repos:"; ls -1 "$REPOS_DIR"; exit 2
+fi
+case "$repo" in */*|.*) echo "refusing unsafe repo name: $repo" >&2; exit 2;; esac
+repo_root="$REPOS_DIR/$repo"
+[ -d "$repo_root/.git" ] || { echo "unknown repo: $repo (have: $(ls -m "$REPOS_DIR"))" >&2; exit 2; }
+
+# Channel = basename of the workspace we're called from (scratch/<ch> or worktrees/<ch>*)
+channel="$(basename "$PWD")"; channel="${channel%%--*}"
+case "$channel" in *[!a-z0-9._-]*|"") echo "cannot derive channel from PWD=$PWD" >&2; exit 2;; esac
+
+branch="${branch:-slack/$channel}"
+target="$WORKTREES_DIR/${channel}--${repo}"
+
+if [ -d "$target" ]; then echo "already exists: $target (branch $(git -C "$target" branch --show-current))"; exit 0; fi
+
+default_ref="$(git -C "$repo_root" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/master)"
+git -C "$repo_root" fetch -q origin "${default_ref#origin/}" "$branch" 2>/dev/null || \
+  git -C "$repo_root" fetch -q origin "${default_ref#origin/}"
+mkdir -p "$WORKTREES_DIR"
+if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+  git -C "$repo_root" worktree add "$target" "$branch"
+elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+  git -C "$repo_root" worktree add -b "$branch" "$target" "origin/$branch"
+else
+  git -C "$repo_root" worktree add -b "$branch" "$target" "$default_ref"
+fi
+
+# Record in the sidecar (flock; the daemon only READS this file at teardown)
+mkdir -p "$(dirname "$SIDECAR")"
+python3 - "$SIDECAR" "$channel" "$repo_root" "$branch" "$target" <<'PY'
+import json, sys, fcntl, os
+path, channel, repo_root, branch, target = sys.argv[1:6]
+fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+with os.fdopen(fd, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    raw = f.read().strip()
+    data = json.loads(raw) if raw else {}
+    ws = {"kind": "repo", "dir": target, "repoRoot": repo_root, "branch": branch}
+    data.setdefault(channel, [])
+    if not any(w.get("dir") == target for w in data[channel]):
+        data[channel].append(ws)
+    f.seek(0); f.truncate(); f.write(json.dumps(data, indent=2))
+PY
+echo "workspace ready: $target  (branch $branch, based on $default_ref)"
+echo "Edit files there by absolute path; commit and push from that directory."
