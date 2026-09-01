@@ -351,6 +351,12 @@ export interface SessionOperations {
   appendSystemPrompt(): string;
 
   /**
+   * Voice replies: the "always speak" reminder to prefix this session's user
+   * turns with, or '' when the switch is off or `speech:` is not configured.
+   */
+  alwaysSpeakReminder(session: Session): string;
+
+  /**
    * Whether scheduled routines are enabled for a platform (default true).
    */
   isRoutinesEnabled(platformId: string): boolean;

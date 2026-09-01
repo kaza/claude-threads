@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { ALWAYS_SPEAK_REMINDER, alwaysSpeakReminder, channelFromWorkingDir, isAlwaysSpeakOn } from './voice-prompt.js';
+import { ALWAYS_SPEAK_REMINDER, alwaysSpeakReminder, isAlwaysSpeakOn, speakKey } from './voice-prompt.js';
 
 let stateDir: string;
 let prevEnv: string | undefined;
@@ -19,46 +19,40 @@ afterEach(async () => {
   await rm(stateDir, { recursive: true, force: true });
 });
 
-describe('channelFromWorkingDir', () => {
-  test('a scratch dir is its own channel', () => {
-    expect(channelFromWorkingDir('/home/herder/scratch/fix-backfill')).toBe('fix-backfill');
+describe('speakKey', () => {
+  test('reduces a composite session id to one filename-safe segment', () => {
+    expect(speakKey('slack-vvs--ch-C0BU9JM6ASW:dcm:slack-vvs--ch-C0BU9JM6ASW')).toBe('slack-vvs--ch-C0BU9JM6ASW_dcm_slack-vvs--ch-C0BU9JM6ASW');
+    expect(speakKey('mattermost-main:1717000000.123')).toBe('mattermost-main_1717000000.123');
   });
 
-  test('a worktree named <channel>--<repo> belongs to the channel', () => {
-    expect(channelFromWorkingDir('/home/herder/worktrees/fix-backfill--vvs-trading-platform')).toBe('fix-backfill');
+  test('matches what the say script derives from the same env value', () => {
+    // scripts/say: tr -c 'A-Za-z0-9._-' '_' on CLAUDE_THREADS_SPEAK_KEY
+    expect(speakKey('a b/c:d')).toBe('a_b_c_d');
   });
 });
 
 describe('alwaysSpeakReminder', () => {
   test('is empty while the switch is off', () => {
-    expect(isAlwaysSpeakOn('/home/herder/scratch/quiet-task')).toBe(false);
-    expect(alwaysSpeakReminder('/home/herder/scratch/quiet-task')).toBe('');
+    expect(isAlwaysSpeakOn('slack:quiet')).toBe(false);
+    expect(alwaysSpeakReminder('slack:quiet')).toBe('');
   });
 
-  test('carries the reminder once say --on left its marker for the channel', async () => {
-    await writeFile(join(stateDir, 'loud-task'), '');
+  test('carries the reminder once say --on left its marker for the session', async () => {
+    await writeFile(join(stateDir, speakKey('slack:loud')), '');
 
-    expect(isAlwaysSpeakOn('/home/herder/scratch/loud-task')).toBe(true);
-    expect(alwaysSpeakReminder('/home/herder/scratch/loud-task')).toBe(`${ALWAYS_SPEAK_REMINDER}\n\n`);
+    expect(isAlwaysSpeakOn('slack:loud')).toBe(true);
+    expect(alwaysSpeakReminder('slack:loud')).toBe(`${ALWAYS_SPEAK_REMINDER}\n\n`);
   });
 
-  test('a worktree of the channel sees the same switch', async () => {
-    await writeFile(join(stateDir, 'loud-task'), '');
+  test('another session is unaffected', async () => {
+    await writeFile(join(stateDir, speakKey('slack:loud')), '');
 
-    expect(isAlwaysSpeakOn('/home/herder/worktrees/loud-task--some-repo')).toBe(true);
+    expect(isAlwaysSpeakOn('slack:other')).toBe(false);
   });
 
-  test('another channel is unaffected', async () => {
-    await writeFile(join(stateDir, 'loud-task'), '');
-
-    expect(isAlwaysSpeakOn('/home/herder/scratch/other-task')).toBe(false);
-  });
-
-  test('a missing state dir means off, not an error', async () => {
-    await rm(stateDir, { recursive: true, force: true });
-    await mkdir(stateDir); // afterEach expects it; recreate after the check below
+  test('a missing state dir means off, not an error', () => {
     process.env.CLAUDE_THREADS_SPEAK_DIR = join(stateDir, 'never-created');
 
-    expect(isAlwaysSpeakOn('/home/herder/scratch/loud-task')).toBe(false);
+    expect(isAlwaysSpeakOn('slack:loud')).toBe(false);
   });
 });

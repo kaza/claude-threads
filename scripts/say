@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
 # say — ElevenLabs text-to-speech for voice replies in a task channel, plus the
-# per-channel "always speak" switch. See docs/voice-replies-spec.md.
+# per-session "always speak" switch. See docs/voice-replies-spec.md.
 #
-#   say "text…"          write say-<ts>.mp3 into the current dir, print its path
-#                        (then send_file it and delete it)
-#   say --on             this channel: speak on every reply from now on
-#   say --off            this channel: stop speaking on every reply
-#   say --status         prints "on" or "off" for this channel (exit 0 either way)
+#   say - <<'EOF'        read the text from stdin (the safe form: no shell
+#   …text…               interpolation of the summary), write say-<ts>.mp3
+#   EOF                  into the current dir, print its path
+#   say --file path      same, text from a file
+#   say "text…"          same, text as an argument (only for trivial text)
+#   say --on             this channel/session: speak on every reply from now on
+#   say --off            stop speaking on every reply
+#   say --status         prints "on" or "off" (exit 0 either way)
 #
-# The channel is the basename of the workspace we're called from
-# (scratch/<ch> or worktrees/<ch>--<repo>), the same rule `workon` uses.
-# The switch is a marker file OUTSIDE the workspace, so it is never committed:
-#   ~/.local/state/claude-threads/speak/<channel>
+# Identity and paths come from the daemon, which exports them into every
+# Claude session it spawns (so a pooled account with its own $HOME changes
+# nothing):
+#   CLAUDE_THREADS_SPEAK_KEY   the session's key (platformId:threadId, sanitised)
+#   CLAUDE_THREADS_SPEAK_DIR   where the switch markers live
+#   CLAUDE_THREADS_CONFIG      the daemon config (0600) holding the key and voice
+# Run by hand outside a session, the key falls back to the workspace basename
+# (`scratch/<ch>` or `worktrees/<ch>--<repo>`, the `workon` rule) and the paths
+# to ~/.local/state/claude-threads/speak and ~/.config/claude-threads/config.yaml.
 #
-# Credentials and voice come from the daemon config (0600), never from args:
-#   speech.apiKey (falls back to transcription.apiKey), speech.voiceId, speech.model
-# Env overrides for tests: SAY_CONFIG, SAY_STATE_DIR, SAY_API_URL, SAY_OUT_DIR.
+# Config: speech.apiKey (falls back to transcription.apiKey), speech.voiceId,
+# speech.model. Test overrides: SAY_API_URL, SAY_OUT_DIR.
 set -euo pipefail
 
-CONFIG="${SAY_CONFIG:-$HOME/.config/claude-threads/config.yaml}"
-STATE_DIR="${SAY_STATE_DIR:-$HOME/.local/state/claude-threads/speak}"
+CONFIG="${CLAUDE_THREADS_CONFIG:-$HOME/.config/claude-threads/config.yaml}"
+STATE_DIR="${CLAUDE_THREADS_SPEAK_DIR:-$HOME/.local/state/claude-threads/speak}"
 API_URL="${SAY_API_URL:-https://api.elevenlabs.io/v1}"
 # The mp3 lands in the workspace because send_file only accepts paths inside
 # the session working directory. In a git worktree the pattern is added to
@@ -27,20 +34,30 @@ API_URL="${SAY_API_URL:-https://api.elevenlabs.io/v1}"
 OUT_DIR="${SAY_OUT_DIR:-$PWD}"
 MAX_CHARS=2500   # ~3 minutes of speech; a spoken reply is a summary, not a report
 
-channel="$(basename "$PWD")"; channel="${channel%%--*}"
-case "$channel" in *[!a-z0-9._-]*|"") echo "say: cannot derive channel from PWD=$PWD" >&2; exit 2;; esac
-marker="$STATE_DIR/$channel"
+if [ -n "${CLAUDE_THREADS_SPEAK_KEY:-}" ]; then
+  key="$(printf '%s' "$CLAUDE_THREADS_SPEAK_KEY" | tr -c 'A-Za-z0-9._-' '_')"
+else
+  key="$(basename "$PWD")"; key="${key%%--*}"
+  case "$key" in *[!a-z0-9._-]*|"") echo "say: cannot derive a channel from PWD=$PWD and CLAUDE_THREADS_SPEAK_KEY is unset" >&2; exit 2;; esac
+fi
+marker="$STATE_DIR/$key"
 
 case "${1:-}" in
-  --on)     mkdir -p "$STATE_DIR"; : > "$marker"; echo "always speak: on ($channel)"; exit 0;;
-  --off)    rm -f "$marker"; echo "always speak: off ($channel)"; exit 0;;
+  --on)     mkdir -p "$STATE_DIR"; : > "$marker"; echo "always speak: on ($key)"; exit 0;;
+  --off)    rm -f "$marker"; echo "always speak: off ($key)"; exit 0;;
   --status) if [ -e "$marker" ]; then echo on; else echo off; fi; exit 0;;
-  ""|-h|--help) sed -n '2,10p' "$0" >&2; exit 2;;
+  -)        text="$(cat)";;
+  --file)   [ -r "${2:-}" ] || { echo "say: --file needs a readable path" >&2; exit 2; }; text="$(cat "$2")";;
+  ""|-h|--help) sed -n '2,12p' "$0" >&2; exit 2;;
+  *)        text="$1";;
 esac
 
-text="$1"
 if [ "${#text}" -gt "$MAX_CHARS" ]; then
   echo "say: text is ${#text} chars, limit is $MAX_CHARS — speak a summary, post the rest as text" >&2
+  exit 2
+fi
+if [ -z "$(printf '%s' "$text" | tr -d '[:space:]')" ]; then
+  echo "say: nothing to say (empty text)" >&2
   exit 2
 fi
 
@@ -70,15 +87,21 @@ if exclude="$(git -C "$OUT_DIR" rev-parse --path-format=absolute --git-path info
   mkdir -p "$(dirname "$exclude")"
   grep -qxF 'say-*.mp3' "$exclude" 2>/dev/null || echo 'say-*.mp3' >> "$exclude"
 fi
+
 # The key travels in a curl config read from a private fd and the JSON body
-# on stdin: neither is visible in the process list, and the text is not bound
-# by ARG_MAX.
-http_code="$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "model_id": sys.argv[2]}))' "$text" "$model_id" \
+# on stdin (the text is passed to python as an argument, never to the shell):
+# neither is visible in the process list, and the text is not bound by ARG_MAX.
+# A transport failure (timeout, DNS, refused) is reported and leaves no file.
+if ! http_code="$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "model_id": sys.argv[2]}))' "$text" "$model_id" \
   | curl -sS --max-time 90 -o "$out" -w '%{http_code}' \
       -K <(printf 'header = "xi-api-key: %s"\n' "$api_key") \
       -X POST "$API_URL/text-to-speech/$voice_id?output_format=mp3_44100_128" \
       -H "Content-Type: application/json" \
-      -d @-)"
+      -d @-)"; then
+  echo "say: request to ElevenLabs failed (curl error above)" >&2
+  rm -f "$out"
+  exit 1
+fi
 if [ "$http_code" != "200" ]; then
   echo "say: ElevenLabs HTTP $http_code: $(head -c 300 "$out" 2>/dev/null)" >&2
   rm -f "$out"

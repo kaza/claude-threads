@@ -15,7 +15,6 @@ import { effectivePermissionMode } from '../../config/index.js';
 import { resolveSessionMemory, activeWorktreeRepoRoot } from '../../memory/store.js';
 import { buildRestartCliOptions } from '../../claude/restart-options.js';
 import { buildAppendSystemPrompt } from '../../commands/system-prompt-generator.js';
-import { CHAT_PLATFORM_PROMPT } from '../../session/lifecycle.js';
 import { post, postError } from '../post-helpers/index.js';
 import { restartClaudeSession } from '../commands/index.js';
 import { createLogger } from '../../utils/logger.js';
@@ -71,7 +70,7 @@ async function buildPluginRestartCliOptions(
       session.threadId,
       session.startedBy,
       session.sessionAllowedUsers,
-      CHAT_PLATFORM_PROMPT,
+      ctx.ops.appendSystemPrompt(),
       ctx.state.githubEmailsStore,
       memoryConfig.enabled && memoryConfig.channelLayer ? ctx.state.memoryStore : null,
       { userAttribution: session.userAttribution },

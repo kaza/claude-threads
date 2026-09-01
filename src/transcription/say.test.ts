@@ -45,17 +45,23 @@ async function writeConfig(yaml: string): Promise<void> {
   await writeFile(configPath, yaml, { mode: 0o600 });
 }
 
-async function runSay(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runSay(
+  args: string[],
+  cwd: string,
+  extra: { env?: Record<string, string>; stdin?: string } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn([SAY, ...args], {
     cwd,
     env: {
       ...process.env,
       PATH: `${binDir}:${process.env.PATH}`,
-      SAY_CONFIG: configPath,
-      SAY_STATE_DIR: stateDir,
+      CLAUDE_THREADS_CONFIG: configPath,
+      CLAUDE_THREADS_SPEAK_DIR: stateDir,
       SAY_OUT_DIR: outDir,
       SAY_API_URL: 'https://el.test/v1',
+      ...extra.env,
     },
+    stdin: extra.stdin === undefined ? undefined : new TextEncoder().encode(extra.stdin),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -168,7 +174,7 @@ describe('say inside a git checkout', () => {
 
     const proc = Bun.spawn([SAY, 'summary'], {
       cwd: worktree,
-      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, SAY_CONFIG: configPath, SAY_STATE_DIR: stateDir, SAY_API_URL: 'https://el.test/v1' },
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, CLAUDE_THREADS_CONFIG: configPath, CLAUDE_THREADS_SPEAK_DIR: stateDir, SAY_API_URL: 'https://el.test/v1' },
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -218,5 +224,57 @@ describe('say --on / --off / --status', () => {
 
     expect(result.stdout).toBe('always speak: off (task-a)');
     expect((await runSay(['--status'], taskA)).stdout).toBe('off');
+  });
+});
+
+describe('say - (stdin)', () => {
+  test('reads the text from stdin and passes shell metacharacters through untouched', async () => {
+    const channelDir = join(root, 'scratch', 'my-task');
+    await mkdir(channelDir, { recursive: true });
+    const text = 'Costs are $(whoami) and `date`; the branch is fix/$HOME "quoted" \\ done';
+
+    const result = await runSay(['-'], channelDir, { stdin: text });
+
+    expect(result.code).toBe(0);
+    const argv = await readFile(curlLog, 'utf8');
+    expect(argv).toContain(JSON.stringify(text));
+  });
+
+  test('refuses empty stdin', async () => {
+    const channelDir = join(root, 'scratch', 'my-task');
+    await mkdir(channelDir, { recursive: true });
+
+    const result = await runSay(['-'], channelDir, { stdin: '   \n' });
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('nothing to say');
+  });
+});
+
+describe('say when curl itself fails', () => {
+  test('a transport failure is an error and leaves no file behind', async () => {
+    await writeFile(join(binDir, 'curl'), '#!/usr/bin/env bash\nprev=""; for a in "$@"; do [ "$prev" = "-o" ] && printf partial > "$a"; prev="$a"; done; echo "curl: (28) timed out" >&2; exit 28\n', { mode: 0o755 });
+    const channelDir = join(root, 'scratch', 'my-task');
+    await mkdir(channelDir, { recursive: true });
+
+    const result = await runSay(['hi'], channelDir);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('request to ElevenLabs failed');
+    expect(await readdir(outDir)).toEqual([]);
+  });
+});
+
+describe('say identity from the daemon', () => {
+  test('CLAUDE_THREADS_SPEAK_KEY names the switch, whatever the working directory is', async () => {
+    const anywhere = join(root, 'repos', 'shared-working-dir');
+    await mkdir(anywhere, { recursive: true });
+    const env = { CLAUDE_THREADS_SPEAK_KEY: 'slack-vvs:dcm:slack-vvs' };
+
+    await runSay(['--on'], anywhere, { env });
+
+    expect((await runSay(['--status'], anywhere, { env })).stdout).toBe('on');
+    expect((await runSay(['--status'], anywhere)).stdout).toBe('off');
+    expect(existsSync(join(stateDir, 'slack-vvs_dcm_slack-vvs'))).toBe(true);
   });
 });

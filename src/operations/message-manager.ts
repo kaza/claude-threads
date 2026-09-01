@@ -67,7 +67,6 @@ import {
 import { createLogger } from '../utils/logger.js';
 import { TypedEventEmitter, createMessageManagerEvents } from './message-manager-events.js';
 import { postSkippedFilesFeedback, postTranscriptFeedback, type BuiltMessageContent, type SkippedFile } from './streaming/handler.js';
-import { alwaysSpeakReminder } from '../transcription/voice-prompt.js';
 import { formatUserTurn, shouldAttribute } from './user-attribution/index.js';
 import { formatSideConversationsForClaude } from './side-conversation/index.js';
 
@@ -116,6 +115,11 @@ export interface MessageManagerOptions {
   updateLastMessage: UpdateLastMessageCallback;
   /** Callback to build message content (handles image attachments) */
   buildMessageContent?: BuildMessageContentCallback;
+  /**
+   * Voice replies: returns the "always speak" reminder to prefix a user turn
+   * with, or '' (docs/voice-replies-spec.md). Omitted = feature off.
+   */
+  alwaysSpeakReminder?: () => string;
   /** Callback to start typing indicator */
   startTyping?: StartTypingCallback;
   /** Callback to emit session update events */
@@ -165,6 +169,7 @@ export class MessageManager {
   private registerPost: RegisterPostCallback;
   private updateLastMessage: UpdateLastMessageCallback;
   private buildMessageContentCallback?: BuildMessageContentCallback;
+  private alwaysSpeakReminderCallback?: () => string;
   private startTypingCallback?: StartTypingCallback;
   private emitSessionUpdateCallback?: EmitSessionUpdateCallback;
 
@@ -233,6 +238,7 @@ export class MessageManager {
     this.registerPost = options.registerPost;
     this.updateLastMessage = options.updateLastMessage;
     this.buildMessageContentCallback = options.buildMessageContent;
+    this.alwaysSpeakReminderCallback = options.alwaysSpeakReminder;
     this.startTypingCallback = options.startTyping;
     this.emitSessionUpdateCallback = options.emitSessionUpdate;
     this.flushDelayMs = options.flushDelayMs ?? MessageManager.DEFAULT_FLUSH_DELAY_MS;
@@ -1151,10 +1157,13 @@ export class MessageManager {
       this.session.pendingSideConversations = [];
     }
 
-    // Voice replies: when `say --on` is in force for this channel, tell the
+    // Voice replies: when `say --on` is in force for this session, tell the
     // model so on every turn — state the daemon can see beats state the model
     // has to remember. Bot-added, so it stays outside the [@user]: prefix.
-    outgoing = alwaysSpeakReminder(this.session.workingDir) + outgoing;
+    // Empty unless the daemon has a `speech:` block (SessionManager decides).
+    if (this.alwaysSpeakReminderCallback) {
+      outgoing = this.alwaysSpeakReminderCallback() + outgoing;
+    }
 
     // Build message content (with files if provided). buildMessageContent processes
     // files once and returns both content and any files it had to skip.

@@ -90,6 +90,7 @@ export function buildRestartCliOptions(
     chrome: ctx.chromeEnabled,
     platformConfig: platformMcpConfig,
     logSessionId: session.sessionId,
+    sessionKey: session.sessionId,
     permissionTimeoutMs: ctx.permissionTimeoutMs,
     account: ctx.account,
     uploadDir: getSessionUploadDir(session.platformId, session.threadId),

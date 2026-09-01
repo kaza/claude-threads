@@ -36,7 +36,7 @@ import { SessionMonitor } from '../operations/monitor/index.js';
 // Import extracted modules
 import * as streaming from '../operations/streaming/index.js';
 import type { SpeechConfig, Transcriber } from '../transcription/index.js';
-import { VOICE_REPLIES_PROMPT } from '../transcription/voice-prompt.js';
+import { VOICE_REPLIES_PROMPT, alwaysSpeakReminder } from '../transcription/voice-prompt.js';
 import * as events from '../operations/events/index.js';
 import * as commands from '../operations/commands/index.js';
 import * as lifecycle from './lifecycle.js';
@@ -496,6 +496,7 @@ export class SessionManager extends EventEmitter {
 
       isRoutinesEnabled: (pid) => this.platformRoutines.get(pid) ?? true,
       appendSystemPrompt: () => this.appendSystemPrompt(),
+      alwaysSpeakReminder: (s) => this.alwaysSpeakReminderFor(s),
 
       fireRoutineNow: (pid, routine) => this.fireRoutineNowImpl(pid, routine),
 
@@ -904,6 +905,11 @@ export class SessionManager extends EventEmitter {
   /** The platform prompt appended to every session, plus the voice rules when speech is configured. */
   private appendSystemPrompt(): string {
     return this.speech ? `${CHAT_PLATFORM_PROMPT}\n\n${VOICE_REPLIES_PROMPT}` : CHAT_PLATFORM_PROMPT;
+  }
+
+  /** The per-turn "always speak" reminder for a session; '' unless speech is configured and the switch is on. */
+  private alwaysSpeakReminderFor(session: Session): string {
+    return this.speech ? alwaysSpeakReminder(session.sessionId) : '';
   }
 
   setStickyMessageCustomization(description?: string, footer?: string): void {

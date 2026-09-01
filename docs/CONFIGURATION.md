@@ -148,7 +148,7 @@ speech:
 | `model` | ElevenLabs text-to-speech model | `eleven_multilingual_v2` |
 | `apiKey` | ElevenLabs key | `transcription.apiKey` |
 
-Requires `scripts/say` on the bot user's `PATH` (e.g. `~/.local/bin/say`) with `python3` + PyYAML and `curl` available; the script reads this config file itself. The "always speak" switch is a per-channel marker under `~/.local/state/claude-threads/speak/`. Details: [`docs/voice-replies-spec.md`](voice-replies-spec.md).
+Requires `scripts/say` on the bot user's `PATH` (e.g. `~/.local/bin/say`) with `python3` + PyYAML and `curl` available. The daemon hands every Claude session its identity and paths in the environment (`CLAUDE_THREADS_SPEAK_KEY`, `CLAUDE_THREADS_SPEAK_DIR`, `CLAUDE_THREADS_CONFIG`), so the script reads this config file and files the "always speak" switch per session under `~/.local/state/claude-threads/speak/` even when the session runs under a pooled account's `$HOME`. The model feeds the summary to `say` on stdin (`say - <<'EOF' … EOF`), never as a shell-interpolated argument. Details: [`docs/voice-replies-spec.md`](voice-replies-spec.md).
 
 ## Platform Settings
 

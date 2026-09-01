@@ -520,6 +520,7 @@ function createMessageManager(
     sessionId: session.sessionId,
     worktreePath: session.worktreeInfo?.worktreePath,
     worktreeBranch: session.worktreeInfo?.branch,
+    alwaysSpeakReminder: () => ctx.ops.alwaysSpeakReminder(session),
     registerPost: (postId, options) => {
       ctx.ops.registerPost(postId, session.threadId);
       postTracker.register(postId, session.threadId, session.sessionId, options);
@@ -1096,6 +1097,7 @@ async function startSessionImpl(
     platformConfig: platformMcpConfig,
     appendSystemPrompt: systemPrompt,
     logSessionId: sessionId,  // Route logs to session panel
+    sessionKey: sessionId,    // Voice replies: identity for the `say` switch
     permissionTimeoutMs: ctx.config.permissionTimeoutMs,
     account: claudeAccount
       ? { id: claudeAccount.id, home: claudeAccount.home, apiKey: claudeAccount.apiKey }
@@ -1498,6 +1500,7 @@ async function resumeSessionImpl(
     platformConfig: platformMcpConfig,
     appendSystemPrompt,
     logSessionId: sessionId,  // Route logs to session panel
+    sessionKey: sessionId,    // Voice replies: identity for the `say` switch
     permissionTimeoutMs: ctx.config.permissionTimeoutMs,
     account: claudeAccount
       ? { id: claudeAccount.id, home: claudeAccount.home, apiKey: claudeAccount.apiKey }
