@@ -5,10 +5,18 @@
  */
 
 import { ElevenLabsTranscriber } from './elevenlabs.js';
-import type { Transcriber, TranscriptionConfig } from './types.js';
+import type { SpeechConfig, Transcriber, TranscriptionConfig } from './types.js';
 
-export type { Transcriber, TranscribeInput, Transcript, TranscriptionConfig } from './types.js';
+export type { SpeechConfig, Transcriber, TranscribeInput, Transcript, TranscriptionConfig } from './types.js';
 export { isTranscribable } from './types.js';
+
+/** Validate the `speech:` block at boot: a half-configured block fails the start, not the first "speak". */
+export function validateSpeechConfig(config: SpeechConfig): SpeechConfig {
+  if (!config.voiceId || typeof config.voiceId !== 'string') {
+    throw new Error('speech.voiceId is required (an ElevenLabs voice id)');
+  }
+  return config;
+}
 
 export function createTranscriber(config: TranscriptionConfig): Transcriber {
   if (config.provider !== 'elevenlabs') {

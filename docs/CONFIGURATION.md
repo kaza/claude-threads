@@ -131,6 +131,25 @@ transcription:
 
 What happens: every `audio/*` attachment (or a file with an audio extension when the platform only reported a generic type) is transcribed after it is saved. Claude receives the usual file list **and** a `[Transcript of voice.webm (elevenlabs):]` block, and the bot posts the transcript back into the thread as a quote so everyone can see what Claude heard. A transcription failure is reported like a skipped file — the audio file itself still reaches Claude. A bad `provider` or missing `apiKey` fails the boot. Details: [`docs/audio-transcription-spec.md`](audio-transcription-spec.md).
 
+### Voice replies (`speech`)
+
+The other direction: with this block the agent can answer in audio. Ask "answer in audio" for one reply, "always speak" to make every reply in that channel carry an mp3 until "speak off". The model writes a spoken summary (under 150 words; details stay in the text), the `say` script on the host synthesises it with ElevenLabs, and `send_file` posts it. Nothing is synthesised by the daemon itself; it only appends the rules to the session's system prompt.
+
+```yaml
+speech:
+  voiceId: XrExE9yKIg1WjnnlVkGX
+  model: eleven_multilingual_v2
+  apiKey: your-elevenlabs-key   # optional; defaults to transcription.apiKey
+```
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `voiceId` | ElevenLabs voice id | required |
+| `model` | ElevenLabs text-to-speech model | `eleven_multilingual_v2` |
+| `apiKey` | ElevenLabs key | `transcription.apiKey` |
+
+Requires `scripts/say` on the bot user's `PATH` (e.g. `~/.local/bin/say`) with `python3` + PyYAML and `curl` available; the script reads this config file itself. The "always speak" switch is a per-channel marker under `~/.local/state/claude-threads/speak/`. Details: [`docs/voice-replies-spec.md`](voice-replies-spec.md).
+
 ## Platform Settings
 
 ### Mattermost

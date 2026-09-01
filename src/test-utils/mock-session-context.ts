@@ -103,6 +103,7 @@ export function createMockSessionContext(makePlatform: () => import('../platform
       getClaudeAccountPoolStatus: mock(() => []),
       getPlatformOverhead: mock(() => ({ sessionHeader: 'full' as const, stickyMessage: 'full' as const })),
       getPlatformMemoryConfig: mock(() => ({ enabled: false, repoLayer: false, channelLayer: false, distillation: false })),
+      appendSystemPrompt: mock(() => ''),
       isRoutinesEnabled: mock(() => true),
       isWatchesEnabled: mock(() => true),
       fireRoutineNow: mock(() => Promise.resolve('ok' as const)),

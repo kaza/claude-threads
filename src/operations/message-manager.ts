@@ -67,6 +67,7 @@ import {
 import { createLogger } from '../utils/logger.js';
 import { TypedEventEmitter, createMessageManagerEvents } from './message-manager-events.js';
 import { postSkippedFilesFeedback, postTranscriptFeedback, type BuiltMessageContent, type SkippedFile } from './streaming/handler.js';
+import { alwaysSpeakReminder } from '../transcription/voice-prompt.js';
 import { formatUserTurn, shouldAttribute } from './user-attribution/index.js';
 import { formatSideConversationsForClaude } from './side-conversation/index.js';
 
@@ -1149,6 +1150,11 @@ export class MessageManager {
       outgoing = formatSideConversationsForClaude(this.session.pendingSideConversations) + attributed;
       this.session.pendingSideConversations = [];
     }
+
+    // Voice replies: when `say --on` is in force for this channel, tell the
+    // model so on every turn — state the daemon can see beats state the model
+    // has to remember. Bot-added, so it stays outside the [@user]: prefix.
+    outgoing = alwaysSpeakReminder(this.session.workingDir) + outgoing;
 
     // Build message content (with files if provided). buildMessageContent processes
     // files once and returns both content and any files it had to skip.

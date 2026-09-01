@@ -35,7 +35,8 @@ import { SessionMonitor } from '../operations/monitor/index.js';
 
 // Import extracted modules
 import * as streaming from '../operations/streaming/index.js';
-import type { Transcriber } from '../transcription/index.js';
+import type { SpeechConfig, Transcriber } from '../transcription/index.js';
+import { VOICE_REPLIES_PROMPT } from '../transcription/voice-prompt.js';
 import * as events from '../operations/events/index.js';
 import * as commands from '../operations/commands/index.js';
 import * as lifecycle from './lifecycle.js';
@@ -494,6 +495,7 @@ export class SessionManager extends EventEmitter {
       getPlatformMemoryConfig: (pid) => this.platformMemory.get(pid) ?? DEFAULT_MEMORY_CONFIG,
 
       isRoutinesEnabled: (pid) => this.platformRoutines.get(pid) ?? true,
+      appendSystemPrompt: () => this.appendSystemPrompt(),
 
       fireRoutineNow: (pid, routine) => this.fireRoutineNowImpl(pid, routine),
 
@@ -890,6 +892,18 @@ export class SessionManager extends EventEmitter {
 
   setTranscriber(transcriber: Transcriber | undefined): void {
     this.transcriber = transcriber;
+  }
+
+  /** Voice replies: when set, every session's system prompt carries the `say` rules. */
+  private speech?: SpeechConfig;
+
+  setSpeech(speech: SpeechConfig | undefined): void {
+    this.speech = speech;
+  }
+
+  /** The platform prompt appended to every session, plus the voice rules when speech is configured. */
+  private appendSystemPrompt(): string {
+    return this.speech ? `${CHAT_PLATFORM_PROMPT}\n\n${VOICE_REPLIES_PROMPT}` : CHAT_PLATFORM_PROMPT;
   }
 
   setStickyMessageCustomization(description?: string, footer?: string): void {
@@ -1576,7 +1590,7 @@ export class SessionManager extends EventEmitter {
       generateWorkSummary: (s) => commands.generateWorkSummary(s),
       getThreadMessagesForContext: (s, limit, excludePostId) => contextPrompt.getThreadMessagesForContext(s, limit, excludePostId),
       formatContextForClaude: (messages, summary) => contextPrompt.formatContextForClaude(messages, summary),
-      appendSystemPrompt: CHAT_PLATFORM_PROMPT,
+      appendSystemPrompt: this.appendSystemPrompt(),
       githubEmailsStore: this.githubEmailsStore,
       memoryStore: this.memoryStore,
       getPlatformMemoryConfig: (pid) => this.platformMemory.get(pid) ?? DEFAULT_MEMORY_CONFIG,

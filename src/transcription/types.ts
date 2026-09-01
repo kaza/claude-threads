@@ -36,6 +36,20 @@ export interface TranscriptionConfig {
   apiUrl?: string;
 }
 
+/**
+ * Top-level `speech:` block: voice replies (docs/voice-replies-spec.md).
+ * The daemon only uses its presence to append the voice rules to the
+ * system prompt; the `say` script on the box reads the values itself.
+ */
+export interface SpeechConfig {
+  /** ElevenLabs voice id. Required. */
+  voiceId: string;
+  /** Defaults to `transcription.apiKey`. */
+  apiKey?: string;
+  /** ElevenLabs TTS model, default `eleven_multilingual_v2`. */
+  model?: string;
+}
+
 /** A transcript produced for one attachment. */
 export interface Transcript {
   /** Original filename of the audio attachment. */
