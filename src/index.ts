@@ -885,7 +885,20 @@ async function startWithoutDaemon() {
           enabled: true,
         });
         session.addPlatform(chConfig.id, chClient, {
-          overhead: { sessionHeader: 'minimal', stickyMessage: 'hidden' },
+          // A task channel inherits the parent's per-platform dials (the
+          // derived config spreads the parent); only the header and sticky
+          // are fixed, because a channel is its own session.
+          overhead: {
+            sessionHeader: 'minimal',
+            stickyMessage: 'hidden',
+            lifecycle: resolveOverheadVisibility(chConfig.lifecycle, `chan[${chConfig.id}].lifecycle`),
+            tools: resolveToolActivity(
+              chConfig.toolActivity,
+              chConfig.toolDetails,
+              `chan[${chConfig.id}]`,
+              { dir: chConfig.toolDetailsDir, url: chConfig.toolDetailsUrl },
+            ),
+          },
           memory: resolveMemoryConfig(chConfig.memory, `chan[${chConfig.id}].memory`),
           routinesEnabled: resolveRoutinesEnabled(chConfig.routines, `chan[${chConfig.id}].routines`),
         });

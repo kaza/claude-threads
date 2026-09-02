@@ -34,3 +34,4 @@ The reasoning and the deploy steps are in the VVS handbook,
 | `pr/audio-transcription` | voice notes are transcribed before Claude sees them | `docs/audio-transcription-spec.md` |
 | `pr/voice-replies` | the agent answers in audio on request or always per channel | `docs/voice-replies-spec.md` |
 | `local/voice-desk` | a live voice conversation with the agent, via Slack | `docs/voice-desk-spec.md`, `voice/README.md` |
+| `local/integration` | glue that only exists where two `pr/*` branches meet (e.g. task channels registered by `pr/dynamic-channels` must receive the `tools` / `lifecycle` dials added by `pr/quiet-tools` / `pr/quiet-lifecycle`). Small commits, each naming the branches it joins; never a PR | this file |
