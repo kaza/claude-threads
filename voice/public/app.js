@@ -66,11 +66,15 @@ async function startCall() {
   if (!channel) throw new Error('pick a channel first');
   el.talk.disabled = true;
   status('starting…');
+  // The AudioContext is created inside the click, before any await, so the
+  // browser's autoplay policy lets it run; resume() covers the suspended case.
+  const ctx = new AudioContext();
+  await ctx.resume().catch(() => undefined);
   const created = await api('calls', { channel });
-  call = { callId: created.callId, setup: created.setup, ws: null, audio: null, handle: null, reconnecting: false, ended: false, tries: 0 };
+  call = { callId: created.callId, setup: created.setup, ws: null, audio: null, handle: null, reconnecting: false, ended: false, ready: false, tries: 0 };
   try {
-    await openMicrophone();
-    await connect(created.token);
+    await openMicrophone(ctx);
+    await connect(created.token, created.setup);
   } catch (err) {
     // Nothing half-open: release the microphone, drop the server-side call, then report.
     const failed = call;
@@ -84,7 +88,11 @@ async function startCall() {
   say('note', `Connected to #${el.channel.options[el.channel.selectedIndex].textContent}. Speak.`);
 }
 
-async function connect(token) {
+async function connect(token, setup) {
+  // The setup must be exactly what the token was constrained with; on a
+  // reconnect that includes the resumption handle, so it always travels with the token.
+  call.setup = setup;
+  call.ready = false;
   const ws = new WebSocket(`${LIVE_WS}?access_token=${encodeURIComponent(token)}`);
   call.ws = ws;
   await new Promise((resolve, reject) => {
@@ -102,6 +110,7 @@ async function connect(token) {
   });
   ws.addEventListener('message', (event) => void onServerMessage(event));
   ws.addEventListener('close', (event) => void onSocketClosed(ws, event));
+  call.ready = true; // only now may audio flow (setupComplete seen)
   call.tries = 0;
   status('listening');
 }
@@ -118,6 +127,7 @@ async function onServerMessage(event) {
       case 'toolCallCancellation': for (const id of ev.ids) call.cancelled?.add(id); break;
       case 'resumption': if (ev.resumable && ev.handle) call.handle = ev.handle; break;
       case 'goAway': status('reconnecting…'); void reconnect(); break;
+      case 'turnComplete': if (call.goodbyePending) { call.goodbyePending = false; void hangUp(false); } break;
       default: break;
     }
   }
@@ -139,7 +149,7 @@ async function reconnect() {
       try {
         const fresh = await api(`calls/${call.callId}/token`, { resume: call.handle ?? '' });
         try { call.ws?.close(); } catch { /* already closed */ }
-        await connect(fresh.token);
+        await connect(fresh.token, fresh.setup);
         say('note', call.handle ? 'Reconnected.' : 'Reconnected as a fresh session (no resumable handle).');
         return;
       } catch (err) {
@@ -166,7 +176,11 @@ async function runTool(c) {
     if (call.cancelled.has(c.id)) return;
     const response = result.ok ? result.result : { error: result.error };
     send(toolResponse([{ id: c.id, name: c.name, response, scheduling: result.scheduling, willContinue: false }]));
-    if (c.name === 'end_call') { call.ended = true; setTimeout(() => hangUp(false), 4000); }
+    if (c.name === 'end_call') {
+      // Let the goodbye turn finish (turnComplete), with a ceiling so a silent model cannot keep the call open.
+      call.goodbyePending = true;
+      setTimeout(() => { if (call?.goodbyePending) { call.goodbyePending = false; void hangUp(false); } }, 8000);
+    }
     if (c.name === 'post_to_channel' && result.ok) say('note', 'Posted to the channel.');
     if (c.name === 'wait_for_reply' && result.ok && result.result.replies) for (const r of result.result.replies) say('desk', `Claude${r.updated ? ' (updated)' : ''}: ${r.text}`);
   } catch (err) {
@@ -198,14 +212,14 @@ async function hangUp(tellServer = true) {
 // Audio
 // ---------------------------------------------------------------------------
 
-async function openMicrophone() {
-  const ctx = new AudioContext();
+async function openMicrophone(ctx) {
   await ctx.audioWorklet.addModule('static/worklet.js');
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   const source = ctx.createMediaStreamSource(stream);
   const worklet = new AudioWorkletNode(ctx, 'voice-desk-capture');
   worklet.port.onmessage = (event) => {
-    if (!call || call.ended || call.ws?.readyState !== WebSocket.OPEN) return;
+    // No audio before setupComplete: Gemini requires setup first (review finding 3).
+    if (!call || call.ended || !call.ready || call.ws?.readyState !== WebSocket.OPEN) return;
     if (call.ws.bufferedAmount > 256 * 1024) return; // backpressure: drop rather than queue seconds of audio
     const pcm = floatTo16BitPCM(downsample(event.data, ctx.sampleRate, 16000));
     send(audioChunkMessage(int16ToBase64(pcm)));
@@ -228,6 +242,9 @@ function playChunk(base64, rate) {
   const samples = pcm16ToFloat(base64ToInt16(base64));
   const buffer = a.ctx.createBuffer(1, samples.length, rate);
   buffer.copyToChannel(samples, 0);
+  // Bound the queue: more than six seconds ahead means the context was
+  // throttled or suspended, and playing that backlog later would be stale.
+  if (a.playhead - a.ctx.currentTime > 6) return;
   const node = a.ctx.createBufferSource();
   node.buffer = buffer;
   node.connect(a.ctx.destination);
@@ -253,7 +270,10 @@ function flushPlayback() {
 async function init() {
   el.talk.addEventListener('click', () => startCall().catch((err) => { showError(err); el.talk.disabled = false; status('idle'); }));
   el.hangup.addEventListener('click', () => void hangUp(true));
-  el.logout.addEventListener('click', () => api('logout', {}).then(showSignedOut).catch(showError));
+  el.logout.addEventListener('click', async () => {
+    if (call) await hangUp(true);   // never leave the microphone or the Gemini session running
+    api('logout', {}).then(showSignedOut).catch(showError);
+  });
   window.addEventListener('pagehide', () => { if (call) navigator.sendBeacon?.(`calls/${call.callId}/end`, new Blob(['{}'], { type: 'application/json' })); });
   try {
     const me = await api('me');

@@ -33,7 +33,7 @@ const BINDINGS = JSON.stringify([
 describe('taskChannels', () => {
   test('offers only bound task channels the user is a member of, never archived or shared ones', async () => {
     const channels = await taskChannels(
-      { slack: slackWith({ 'conversations.list': [LIST] }), bindingsFile: '/x/bindings.json', readFile: async () => BINDINGS },
+      { slack: slackWith({ 'conversations.list': [LIST] }), botUserId: 'UBOT', bindingsFile: '/x/bindings.json', readFile: async () => BINDINGS },
       'xoxp',
     );
 
@@ -42,7 +42,7 @@ describe('taskChannels', () => {
 
   test('a channel the user is in but the daemon has not bound is not offered', async () => {
     const channels = await taskChannels(
-      { slack: slackWith({ 'conversations.list': [LIST] }), bindingsFile: '/x/bindings.json', readFile: async () => BINDINGS },
+      { slack: slackWith({ 'conversations.list': [LIST] }), botUserId: 'UBOT', bindingsFile: '/x/bindings.json', readFile: async () => BINDINGS },
       'xoxp',
     );
 
@@ -52,21 +52,33 @@ describe('taskChannels', () => {
   test('a missing bindings file is an error, not an empty list', async () => {
     const missing = async () => { const e = new Error('ENOENT') as NodeJS.ErrnoException; e.code = 'ENOENT'; throw e; };
 
-    await expect(taskChannels({ slack: slackWith({}), bindingsFile: '/nope.json', readFile: missing }, 'xoxp')).rejects.toThrow('ENOENT');
+    await expect(taskChannels({ slack: slackWith({}), botUserId: 'UBOT', bindingsFile: '/nope.json', readFile: missing }, 'xoxp')).rejects.toThrow('ENOENT');
   });
 
-  test('a malformed bindings file is an error', async () => {
+  test('a malformed bindings file is an error, and so is a malformed entry', async () => {
     await expect(
-      taskChannels({ slack: slackWith({}), bindingsFile: '/x.json', readFile: async () => '{"not":"an array"}' }, 'xoxp'),
+      taskChannels({ slack: slackWith({}), bindingsFile: '/x.json', botUserId: 'UBOT', readFile: async () => '{"not":"an array"}' }, 'xoxp'),
     ).rejects.toThrow(/not an array/);
+    await expect(
+      taskChannels({ slack: slackWith({}), bindingsFile: '/x.json', botUserId: 'UBOT', readFile: async () => '[{"channelId":"C1"}]' }, 'xoxp'),
+    ).rejects.toThrow(/malformed entry/);
   });
 });
 
 describe('canUseChannel', () => {
-  test('is true only for an offered channel', async () => {
-    const deps = { slack: slackWith({ 'conversations.list': [LIST, LIST] }), bindingsFile: '/x.json', readFile: async () => BINDINGS };
+  test('is true only for an offered channel the bot is still in', async () => {
+    const deps = {
+      slack: slackWith({
+        'conversations.list': [LIST, LIST, LIST],
+        'conversations.members': [{ ok: true, members: ['U1', 'UBOT'], response_metadata: { next_cursor: '' } }, { ok: true, members: ['U1'], response_metadata: { next_cursor: '' } }],
+      }),
+      bindingsFile: '/x.json',
+      botUserId: 'UBOT',
+      readFile: async () => BINDINGS,
+    };
 
-    expect(await canUseChannel(deps, 'xoxp', 'C1')).toBe(true);
-    expect(await canUseChannel(deps, 'xoxp', 'C2')).toBe(false);
+    expect(await canUseChannel(deps, 'xoxp', 'C1')).toBe(true);   // bound, member, bot present
+    expect(await canUseChannel(deps, 'xoxp', 'C1')).toBe(false);  // bot has left since
+    expect(await canUseChannel(deps, 'xoxp', 'C2')).toBe(false);  // not bound
   });
 });

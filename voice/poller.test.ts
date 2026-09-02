@@ -95,10 +95,24 @@ describe('settle: which history messages count as finished agent replies', () =>
     expect(delivered.text.endsWith('… (truncated; the full text is in the channel)')).toBe(true);
   });
 
-  test('a message that disappears from history is forgotten', () => {
-    const first = settle([bot('1.1', 'gone soon')], { botUserId: BOT, seen: {}, since: '1.0' });
+  test('a candidate missing from one page of history is remembered, not forgotten', () => {
+    const first = settle([bot('1.1', 'pushed out of the page')], { botUserId: BOT, seen: {}, since: '1.0' });
     const second = settle([], { botUserId: BOT, seen: first.seen, since: '1.0' });
 
-    expect(second.seen).toEqual({});
+    expect(second.seen['1.1']).toEqual({ text: 'pushed out of the page', quiet: 1, delivered: undefined });
+  });
+
+  test('a bot reply carrying both user and bot_id, as Slack sends them, is delivered', () => {
+    const history = [bot('1.1', 'from the daemon', { bot_id: 'B0BOT' })];
+
+    const deliveries = polls(Array(QUIET_POLLS).fill(history));
+
+    expect(deliveries[QUIET_POLLS - 1]).toEqual([{ ts: '1.1', text: 'from the daemon', updated: false }]);
+  });
+
+  test('another bot with a different user id is still ignored even without a bot_id', () => {
+    const deliveries = polls(Array(QUIET_POLLS).fill([{ ts: '1.1', user: 'UOTHER', text: 'spam' }]));
+
+    expect(deliveries.flat()).toEqual([]);
   });
 });

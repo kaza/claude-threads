@@ -9,7 +9,7 @@
 
 import { mintEphemeralToken, type GeminiDeps } from './gemini.js';
 import { buildConstraints } from './prompt.js';
-import { settle, type SeenMap, type SettledReply } from './poller.js';
+import { QUIET_POLLS, settle, type SeenMap, type SettledReply } from './poller.js';
 import type { Store, StoredCall, StoredUser } from './session.js';
 import {
   SlackError,
@@ -58,8 +58,13 @@ interface Mailbox {
   waiters: Array<() => void>;
   /** Slack ts at which this call started; earlier replies are never delivered. */
   startTs: string;
-  /** Gemini call ids already answered, with their results (idempotent re-delivery). */
-  results: Map<string, ToolResult>;
+  /**
+   * Gemini call ids already answered or in flight, with their results.
+   * The entry is reserved BEFORE the Slack call (a promise), so a duplicate
+   * delivery arriving mid-flight waits for the same result instead of
+   * posting twice (review finding 6).
+   */
+  results: Map<string, Promise<ToolResult>>;
 }
 
 interface ChannelPoller {
@@ -85,6 +90,8 @@ export class Calls {
   private readonly pollers = new Map<string, ChannelPoller>();
   /** post_to_channel timestamps per user: the budget is per person, across their calls. */
   private readonly postTimes = new Map<string, number[]>();
+  /** Card operations per channel run one at a time: two first calls must not create two cards. */
+  private readonly cardLocks = new Map<string, Promise<void>>();
   /** Workspace-wide: no Slack polling before this time (429 Retry-After). */
   private cooldownUntil = 0;
   private reaper?: ReturnType<typeof setInterval>;
@@ -105,7 +112,7 @@ export class Calls {
     const now = this.deps.now();
     // Mint first: a Gemini failure then leaves no card, no stored call, no poller.
     const minted = await this.mint(callId);
-    await this.joinCard(user, channel);
+    await this.withCardLock(channel, () => this.joinCard(user, channel));
     await this.deps.store.update((s) => {
       s.calls[callId] = { callId, userId: user.userId, channel, createdAt: now, lastActivityAt: now };
     });
@@ -135,6 +142,13 @@ export class Calls {
     await this.forget(call, user);
   }
 
+  /** Every live call of one person, e.g. on logout or a dead token. */
+  async endAllForUser(user: StoredUser): Promise<void> {
+    for (const call of Object.values(this.deps.store.snapshot().calls).filter((c) => c.userId === user.userId)) {
+      await this.forget(call, user);
+    }
+  }
+
   private async forget(call: StoredCall, user?: StoredUser): Promise<void> {
     const mailbox = this.mailboxes.get(call.callId);
     this.mailboxes.delete(call.callId);
@@ -142,25 +156,36 @@ export class Calls {
     await this.deps.store.update((s) => { delete s.calls[call.callId]; });
     const remaining = Object.values(this.deps.store.snapshot().calls).filter((c) => c.channel === call.channel);
     if (remaining.length === 0) this.stopPoller(call.channel);
-    await this.leaveCard(call, user, remaining.length === 0);
+    const userStillOnChannel = remaining.some((c) => c.userId === call.userId);
+    await this.withCardLock(call.channel, () => this.leaveCard(call, user, remaining.length === 0, userStillOnChannel));
     this.deps.log(`call=${call.callId} user=${call.userId} channel=${call.channel} end`);
   }
 
-  /** On boot: nothing is live, so every persisted call and card is stale. */
+  /**
+   * On boot: nothing is live, so every persisted call is stale and every
+   * card should be ended. A card whose end fails stays recorded so the next
+   * boot (or reaper) tries again; a card without a usable owner token is
+   * unreachable and dropped with a log line.
+   */
   async bootCleanup(): Promise<void> {
     const state = this.deps.store.snapshot();
+    const ended: string[] = [];
     for (const card of Object.values(state.cards)) {
       const owner = state.users[card.userId];
-      if (owner) {
-        try {
-          await callsEnd(this.deps.slack, owner.token, card.slackCallId);
-          this.deps.log(`boot: ended stale card ${card.slackCallId} in ${card.channel}`);
-        } catch (err) {
-          this.deps.log(`boot: could not end card ${card.slackCallId}: ${(err as Error).message}`);
-        }
+      if (!owner) {
+        this.deps.log(`boot: card ${card.slackCallId} in ${card.channel} has no owner token; dropping the record`);
+        ended.push(card.channel);
+        continue;
+      }
+      try {
+        await callsEnd(this.deps.slack, owner.token, card.slackCallId);
+        this.deps.log(`boot: ended stale card ${card.slackCallId} in ${card.channel}`);
+        ended.push(card.channel);
+      } catch (err) {
+        this.deps.log(`boot: could not end card ${card.slackCallId}, keeping it for a retry: ${(err as Error).message}`);
       }
     }
-    await this.deps.store.update((s) => { s.calls = {}; s.cards = {}; });
+    await this.deps.store.update((s) => { s.calls = {}; for (const ch of ended) delete s.cards[ch]; });
   }
 
   startReaper(intervalMs = 60_000): void {
@@ -198,26 +223,28 @@ export class Calls {
 
   private async dispatch(user: StoredUser, call: StoredCall, mailbox: Mailbox, inv: { id: string; name: string; args: Record<string, unknown> }): Promise<ToolResult> {
     switch (inv.name) {
-      case 'post_to_channel': {
-        const previous = mailbox.results.get(inv.id);
-        if (previous) return previous;
-        const result = await this.postToChannel(user, call, mailbox, inv.args);
-        mailbox.results.set(inv.id, result);
-        return result;
-      }
+      case 'post_to_channel':
+        return this.once(mailbox, inv.id, () => this.postToChannel(user, call, mailbox, inv.args));
       case 'wait_for_reply':
         return this.waitForReply(mailbox);
-      case 'end_call': {
-        const previous = mailbox.results.get(inv.id);
-        if (previous) return previous;
-        const result: ToolResult = { ok: true, result: { ended: true }, scheduling: 'WHEN_IDLE' };
-        mailbox.results.set(inv.id, result);
-        await this.forget(call, user);
-        return result;
-      }
+      case 'end_call':
+        return this.once(mailbox, inv.id, async () => {
+          await this.forget(call, user);
+          return { ok: true, result: { ended: true }, scheduling: 'WHEN_IDLE' } as ToolResult;
+        });
       default:
         throw new HttpError(400, `unknown tool: ${inv.name}`);
     }
+  }
+
+  /** Reserve the Gemini call id before running, so a concurrent duplicate joins the same promise. */
+  private once(mailbox: Mailbox, id: string, run: () => Promise<ToolResult>): Promise<ToolResult> {
+    const existing = mailbox.results.get(id);
+    if (existing) return existing;
+    const pending = run();
+    mailbox.results.set(id, pending);
+    pending.catch(() => mailbox.results.delete(id)); // a thrown error is not a result to replay
+    return pending;
   }
 
   private async postToChannel(user: StoredUser, call: StoredCall, mailbox: Mailbox, args: Record<string, unknown>): Promise<ToolResult> {
@@ -309,12 +336,16 @@ export class Calls {
       const messages = await history(this.deps.slack, tokenOwner.token, channel, poller.since);
       const { settled, seen } = settle(messages, { botUserId: this.deps.botUserId, seen: poller.seen, since: poller.since });
       poller.seen = seen;
-      // Advance the cursor past posts old enough that the daemon will not edit
-      // them again, so a long session does not re-fetch its whole history on
-      // every poll. Younger posts stay visible for the settled/updated rule.
+      // Advance the cursor past posts that are old, delivered, and unchanged
+      // since delivery, so a long session does not re-fetch its whole history
+      // on every poll. A post still being edited, or edited after delivery,
+      // stays visible until it re-settles. The accepted limit (spec): an edit
+      // to a post that was quiet for more than ten minutes is not re-read.
       const horizon = (this.deps.now() - EDIT_HORIZON_MS) / 1000;
       for (const ts of Object.keys(seen)) {
-        if (parseFloat(ts) < horizon && seen[ts].delivered !== undefined && parseFloat(ts) > parseFloat(poller.since)) {
+        const entry = seen[ts];
+        const finished = entry.delivered !== undefined && entry.delivered === entry.text && entry.quiet >= QUIET_POLLS;
+        if (finished && parseFloat(ts) < horizon && parseFloat(ts) > parseFloat(poller.since)) {
           poller.since = ts;
           delete poller.seen[ts];
         }
@@ -347,12 +378,26 @@ export class Calls {
   // Call card
   // ---------------------------------------------------------------------------
 
+  /** Serialise card work per channel. */
+  private withCardLock<T>(channel: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.cardLocks.get(channel) ?? Promise.resolve();
+    const run = previous.then(work, work);
+    this.cardLocks.set(channel, run.then(() => undefined, () => undefined));
+    return run;
+  }
+
   private async joinCard(user: StoredUser, channel: string): Promise<void> {
     const existing = this.deps.store.snapshot().cards[channel];
     if (existing) {
+      const alreadyOn = Object.values(this.deps.store.snapshot().calls).some((c) => c.channel === channel && c.userId === user.userId);
+      if (alreadyOn) return; // a second tab: one participant per person on the card
       try {
         await callParticipantsAdd(this.deps.slack, user.token, existing.slackCallId, user.userId);
       } catch (err) {
+        if (isTokenDead(err)) {
+          this.deps.onTokenDead?.(user.userId);
+          throw new HttpError(401, 'Slack token no longer valid; sign in again');
+        }
         this.deps.log(`card ${existing.slackCallId}: participants.add failed: ${(err as Error).message}`);
       }
       return;
@@ -374,7 +419,7 @@ export class Calls {
     });
   }
 
-  private async leaveCard(call: StoredCall, user: StoredUser | undefined, last: boolean): Promise<void> {
+  private async leaveCard(call: StoredCall, user: StoredUser | undefined, last: boolean, userStillOnChannel: boolean): Promise<void> {
     const card = this.deps.store.snapshot().cards[call.channel];
     if (!card) return;
     const token = user?.token ?? this.deps.store.snapshot().users[card.userId]?.token;
@@ -383,7 +428,7 @@ export class Calls {
       if (last) {
         await callsEnd(this.deps.slack, token, card.slackCallId);
         await this.deps.store.update((s) => { delete s.cards[call.channel]; });
-      } else {
+      } else if (!userStillOnChannel) {
         await callParticipantsRemove(this.deps.slack, token, card.slackCallId, call.userId);
       }
     } catch (err) {

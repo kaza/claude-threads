@@ -6,6 +6,8 @@
 export interface SlackDeps {
   fetch: typeof fetch;
   apiUrl?: string;
+  /** One line per API call: method, outcome, duration, Retry-After. Never message text. */
+  log?: (line: string) => void;
 }
 
 const DEFAULT_API_URL = 'https://slack.com/api';
@@ -41,18 +43,31 @@ export function isTokenDead(err: unknown): boolean {
 async function call<T>(deps: SlackDeps, method: string, token: string | null, params: Record<string, unknown>): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json; charset=utf-8' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await deps.fetch(`${(deps.apiUrl ?? DEFAULT_API_URL).replace(/\/+$/, '')}/${method}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(params),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  const started = Date.now();
+  const done = (outcome: string) => deps.log?.(`slack ${method} ${outcome} ${Date.now() - started}ms`);
+  let response: Response;
+  try {
+    response = await deps.fetch(`${(deps.apiUrl ?? DEFAULT_API_URL).replace(/\/+$/, '')}/${method}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(params),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    done(`transport-error ${(err as Error).name}`);
+    throw err;
+  }
   if (response.status === 429) {
     const retry = Number(response.headers.get('retry-after') ?? '1');
+    done(`429 retry-after=${retry}`);
     throw new SlackError(method, 'ratelimited', Number.isFinite(retry) ? retry : 1);
   }
-  const data = await parse<T>(response, method);
-  if (!data.ok) throw new SlackError(method, data.error ?? `http_${response.status}`);
+  const data = await parse<T>(response, method).catch((err) => { done(`http_${response.status} not-json`); throw err; });
+  if (!data.ok) {
+    done(`error=${data.error ?? `http_${response.status}`}`);
+    throw new SlackError(method, data.error ?? `http_${response.status}`);
+  }
+  done('ok');
   return data;
 }
 

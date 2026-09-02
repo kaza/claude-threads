@@ -67,6 +67,14 @@ function text(body: string, status = 200, extra: Record<string, string> = {}): R
 
 export function createApp(deps: AppDeps): { fetch: (req: Request) => Promise<Response> } {
   const signer = createCookieSigner(deps.sessionSecret);
+  /** OAuth nonces issued and not yet consumed, with their expiry: a callback may use one exactly once. */
+  const pendingNonces = new Map<string, number>();
+  const takeNonce = (nonce: string): boolean => {
+    const expires = pendingNonces.get(nonce);
+    pendingNonces.delete(nonce);
+    for (const [n, t] of pendingNonces) if (t < Date.now()) pendingNonces.delete(n);
+    return expires !== undefined && expires >= Date.now();
+  };
   const origin = new URL(deps.publicUrl).origin;
   const cookiePath = deps.basePath === '' ? '' : deps.basePath;
   const nonce = deps.randomToken ?? randomToken;
@@ -83,11 +91,16 @@ export function createApp(deps: AppDeps): { fetch: (req: Request) => Promise<Res
     return pathname;
   }
 
+  /** The cookie carries `userId:session`; both must match the stored user. */
   async function currentUser(req: Request): Promise<StoredUser | null> {
     const cookies = parseCookies(req.headers.get('cookie'));
-    const userId = await signer.verify(cookies[SESSION_COOKIE]);
-    if (!userId) return null;
-    return deps.store.snapshot().users[userId] ?? null;
+    const value = await signer.verify(cookies[SESSION_COOKIE]);
+    if (!value) return null;
+    const colon = value.indexOf(':');
+    if (colon <= 0) return null;
+    const user = deps.store.snapshot().users[value.slice(0, colon)];
+    if (!user || !user.session || user.session !== value.slice(colon + 1)) return null;
+    return user;
   }
 
   /** CSRF: browsers send Origin on every cross-site and same-site POST; require ours, and JSON. */
@@ -130,6 +143,7 @@ export function createApp(deps: AppDeps): { fetch: (req: Request) => Promise<Res
 
     if (req.method === 'GET' && path === '/oauth/start') {
       const state = nonce();
+      pendingNonces.set(state, Date.now() + OAUTH_MAX_AGE * 1000);
       const signedState = await signer.sign(state);
       const authorize = new URL('https://slack.com/oauth/v2/authorize');
       authorize.searchParams.set('client_id', deps.slackClientId);
@@ -146,7 +160,9 @@ export function createApp(deps: AppDeps): { fetch: (req: Request) => Promise<Res
       const expectedState = await signer.verify(cookies[OAUTH_COOKIE]);
       const state = url.searchParams.get('state');
       const code = url.searchParams.get('code');
-      if (!expectedState || !state || state !== expectedState || !code) return text('sign-in state mismatch; start again', 400, { 'Set-Cookie': clear });
+      if (!expectedState || !state || state !== expectedState || !code || !takeNonce(state)) {
+        return text('sign-in state mismatch or already used; start again', 400, { 'Set-Cookie': clear });
+      }
       const access = await oauthAccess(deps.slack, {
         clientId: deps.slackClientId,
         clientSecret: deps.slackClientSecret,
@@ -155,10 +171,11 @@ export function createApp(deps: AppDeps): { fetch: (req: Request) => Promise<Res
       });
       if (access.teamId !== deps.slackTeamId) return text('this Slack workspace is not allowed here', 403, { 'Set-Cookie': clear });
       const name = await userName(deps.slack, access.token, access.userId);
-      await deps.store.update((s) => { s.users[access.userId] = { userId: access.userId, name, token: access.token }; });
+      const session = nonce();
+      await deps.store.update((s) => { s.users[access.userId] = { userId: access.userId, name, token: access.token, session }; });
       deps.log(`user=${access.userId} signed in`);
       const headers = new Headers({ Location: `${deps.publicUrl}/` });
-      headers.append('Set-Cookie', sessionCookie(await signer.sign(access.userId)));
+      headers.append('Set-Cookie', sessionCookie(await signer.sign(`${access.userId}:${session}`)));
       headers.append('Set-Cookie', clear);
       return withHeaders(new Response(null, { status: 302, headers }));
     }
@@ -175,6 +192,8 @@ export function createApp(deps: AppDeps): { fetch: (req: Request) => Promise<Res
     if (blocked) return blocked;
 
     if (path === '/logout') {
+      // Their live calls end first (cards, pollers, mailboxes), then the token goes.
+      await deps.calls.endAllForUser(user);
       await deps.store.update((s) => { delete s.users[user.userId]; });
       deps.log(`user=${user.userId} signed out`);
       return json({ ok: true }, 200, { 'Set-Cookie': expired() });

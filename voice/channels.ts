@@ -8,7 +8,7 @@
  */
 
 import { readFile } from 'fs/promises';
-import { listChannels, type SlackDeps } from './slack.js';
+import { channelMembers, listChannels, type SlackDeps } from './slack.js';
 
 export interface TaskChannel {
   id: string;
@@ -25,6 +25,8 @@ export interface ChannelDeps {
   slack: SlackDeps;
   /** The daemon's binding file. Required. */
   bindingsFile: string;
+  /** The Claude Code bot's user id; a bound channel it has since left is not usable. */
+  botUserId: string;
   readFile?: (path: string) => Promise<string>;
 }
 
@@ -32,7 +34,12 @@ async function bindings(deps: ChannelDeps): Promise<Binding[]> {
   const read = deps.readFile ?? ((p: string) => readFile(p, 'utf8'));
   const parsed = JSON.parse(await read(deps.bindingsFile)) as unknown;
   if (!Array.isArray(parsed)) throw new Error(`bindings file is not an array: ${deps.bindingsFile}`);
-  return parsed.filter((b): b is Binding => typeof b?.channelId === 'string' && typeof b?.channelName === 'string');
+  for (const b of parsed) {
+    if (typeof b?.channelId !== 'string' || typeof b?.channelName !== 'string') {
+      throw new Error(`bindings file has a malformed entry: ${JSON.stringify(b).slice(0, 120)}`);
+    }
+  }
+  return parsed as Binding[];
 }
 
 /**
@@ -49,7 +56,13 @@ export async function taskChannels(deps: ChannelDeps, userToken: string): Promis
     .map((c) => ({ id: c.id, name: bound.get(c.id) ?? c.name }));
 }
 
-/** True when the user may start a call in this channel right now. */
+/**
+ * True when the user may start a call in this channel right now: offered by
+ * `taskChannels`, and the bot is still a member (a stale binding after the
+ * bot was removed must not be usable — review finding 9).
+ */
 export async function canUseChannel(deps: ChannelDeps, userToken: string, channelId: string): Promise<boolean> {
-  return (await taskChannels(deps, userToken)).some((c) => c.id === channelId);
+  if (!(await taskChannels(deps, userToken)).some((c) => c.id === channelId)) return false;
+  const members = await channelMembers(deps.slack, userToken, channelId);
+  return members.includes(deps.botUserId);
 }

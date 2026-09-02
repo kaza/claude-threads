@@ -319,6 +319,9 @@ Tests (`bun test voice/`), each with fake `fetch` and a fake clock injected thro
 | — | round 2: quiet ≠ complete | Codex | **must**: three quiet polls plus re-delivery on later change; the daemon emits no completion signal to use instead |
 | — | round 2: no protocol tests, no live smoke | Codex | **must**: `public/live.js` pure helpers under test; gated `smoke.ts` |
 | — | round 2: transcript pane has no source | Codex | **must**: input/output transcription in the locked setup |
+| — | code review (Codex, 16): reply filter dropped bot messages carrying `bot_id`; reconnect sent the old setup; audio before `setupComplete`; racy id dedupe; logout left the mic and the calls; nonce not one-use; cookies not revocable; card races and participant counting; boot dropped failed cards; goodbye cut at 4 s; bot membership unchecked; history page forgot candidates; malformed bindings tolerated; Slack calls unlogged | Codex | **fixed**, each with a test where the behaviour is server-side |
+| — | code review: the ten-minute poll cursor contradicts "re-deliver on later edit" | Codex | **partly accepted**: the cursor now moves only past posts that were delivered, unchanged since, and quiet; an edit to a post idle for more than ten minutes is not re-read. Re-fetching the whole channel forever is the worse trade |
+| — | code review: no browser WebSocket/AudioContext test harness | Codex | **deferred**: the pure helpers are tested; the socket and audio path are covered by the gated live smoke and the first real calls. Written down so it is a known gap, not a forgotten one |
 
 ## Decisions
 
