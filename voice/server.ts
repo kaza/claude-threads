@@ -23,6 +23,8 @@ function required(name: string): string {
 const log = (line: string) => console.log(`[${new Date().toISOString()}] ${line}`);
 
 const publicUrl = required('PUBLIC_URL').replace(/\/+$/, '');
+/** GEMINI_TOOLS_ASYNC=false for a model that runs tools sequentially (3.1 Flash Live). */
+const asyncTools = (process.env.GEMINI_TOOLS_ASYNC ?? 'true') !== 'false';
 const basePath = (process.env.BASE_PATH ?? new URL(publicUrl).pathname).replace(/\/+$/, '');
 const configDir = process.env.VOICE_DESK_DIR ?? join(homedir(), '.config', 'voice-desk');
 const store = await createStore(join(configDir, 'state.json'));
@@ -39,7 +41,8 @@ const calls = new Calls({
   // A model that runs tools sequentially (3.1 Flash Live, measured 2026-09-02)
   // is silent for the whole wait; give it control back quickly. The async
   // 2.5 native-audio model keeps talking, so the long wait is fine there.
-  waitDeadlineMs: process.env.WAIT_DEADLINE_MS ? Number(process.env.WAIT_DEADLINE_MS) : undefined,
+  waitDeadlineMs: process.env.WAIT_DEADLINE_MS ? Number(process.env.WAIT_DEADLINE_MS) : (asyncTools ? undefined : 3000),
+  asyncTools,
   now: () => Date.now(),
   log,
   onTokenDead: (userId) =>
@@ -70,7 +73,7 @@ calls.startReaper();
 const hostname = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 8787);
 Bun.serve({ hostname, port, fetch: (req) => app.fetch(req) });
-log(`voice-desk listening on ${hostname}:${port}, public ${publicUrl}, model ${process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL}`);
+log(`voice-desk listening on ${hostname}:${port}, public ${publicUrl}, model ${process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL}, tools ${asyncTools ? 'async' : 'sequential'}`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {

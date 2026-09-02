@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { mintEphemeralToken } from './gemini.js';
-import { FRONT_DESK_INSTRUCTION, TOOL_DECLARATIONS, TOOL_NAMES, buildSetup } from './prompt.js';
+import { FRONT_DESK_INSTRUCTION, TOOL_DECLARATIONS, TOOL_NAMES, buildSetup, frontDeskInstruction } from './prompt.js';
 
 function fakeFetch(status: number, body: unknown) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -31,12 +31,23 @@ describe('mintEphemeralToken', () => {
     expect(setup.model).toBe('models/gemini-live-2.5-flash-preview');
     expect(setup.generationConfig.responseModalities).toEqual(['AUDIO']);
     expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe('Aoede');
-    expect(setup.systemInstruction.parts[0].text).toBe(FRONT_DESK_INSTRUCTION);
+    expect(setup.systemInstruction.parts[0].text).toBe(frontDeskInstruction(true));
+    expect(setup.systemInstruction.parts[0].text).toContain('keep the person company');
     expect(setup.tools[0].functionDeclarations.map((d: { name: string }) => d.name)).toEqual([...TOOL_NAMES]);
     expect(setup.sessionResumption).toEqual({});
     expect(setup.contextWindowCompression).toEqual({ slidingWindow: {} });
     expect(setup.inputAudioTranscription).toEqual({});
     expect(setup.outputAudioTranscription).toEqual({});
+  });
+
+  test('with sequential tools the declarations carry no behavior and the instruction stops promising to chat', () => {
+    const setup = buildSetup({ model: 'm', voiceName: 'Aoede', asyncTools: false });
+
+    const decls = setup.tools[0].functionDeclarations as Array<{ name: string; behavior?: string }>;
+    expect(decls.map((d) => d.name)).toEqual([...TOOL_NAMES]);
+    expect(decls.every((d) => d.behavior === undefined)).toBe(true);
+    expect(setup.systemInstruction.parts[0].text).toContain('returns within a few seconds');
+    expect(setup.systemInstruction.parts[0].text).not.toContain('keep the person company');
   });
 
   test('passes a resumption handle through on reconnect', () => {
