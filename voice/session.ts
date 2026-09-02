@@ -89,6 +89,12 @@ export interface StoredUser {
   name: string;
   /** Slack user token (xoxp). Never leaves the box. */
   token: string;
+  /**
+   * Random per-login generation. The cookie carries it; a new login rotates
+   * it, so a copied cookie dies with the login that minted it (review
+   * finding 9) and logout is durable.
+   */
+  session?: string;
 }
 
 export interface StoredCall {

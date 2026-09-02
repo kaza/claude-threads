@@ -30,6 +30,7 @@ function fakeSlack() {
       'chat.postMessage': { ok: true, ts: '1.1' },
       'calls.end': { ok: true },
       'conversations.history': { ok: true, messages: [] },
+      'conversations.members': { ok: true, members: ['U1', 'UBOT'], response_metadata: { next_cursor: '' } },
     };
     return new Response(JSON.stringify(scripted ?? defaults[method] ?? { ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
   }) as unknown as typeof fetch;
@@ -72,7 +73,7 @@ beforeEach(async () => {
     store,
     sessionSecret: SECRET,
     calls,
-    channels: { slack: { fetch: slack.fn }, bindingsFile: '/x.json', readFile: async () => JSON.stringify([{ channelId: 'C1', channelName: 'fix-backfill' }]) },
+    channels: { slack: { fetch: slack.fn }, bindingsFile: '/x.json', botUserId: 'UBOT', readFile: async () => JSON.stringify([{ channelId: 'C1', channelName: 'fix-backfill' }]) },
     publicDir: join(dir, 'public'),
     log: () => {},
     randomToken: () => 'nonce-1',
@@ -88,9 +89,9 @@ const get = (path: string, headers: Record<string, string> = {}) => app.fetch(ne
 const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
   app.fetch(new Request(`${ORIGIN}${path}`, { method: 'POST', body: JSON.stringify(body), headers: { origin: ORIGIN, 'content-type': 'application/json', ...headers } }));
 
-async function signedInCookie(userId = 'U1'): Promise<string> {
-  await store.update((s) => { s.users[userId] = { userId, name: 'Almir', token: 'xoxp-1' }; });
-  return `${SESSION_COOKIE}=${await createCookieSigner(SECRET).sign(userId)}`;
+async function signedInCookie(userId = 'U1', session = 'sess-1'): Promise<string> {
+  await store.update((s) => { s.users[userId] = { userId, name: 'Almir', token: 'xoxp-1', session }; });
+  return `${SESSION_COOKIE}=${await createCookieSigner(SECRET).sign(`${userId}:${session}`)}`;
 }
 
 function setCookies(res: Response): string[] {
@@ -153,7 +154,8 @@ describe('sign in with Slack', () => {
     expect(res.headers.get('location')).toBe(`${PUBLIC_URL}/`);
     const exchange = slack.recorded.find((r) => r.method === 'oauth.v2.access') as { body: string };
     expect(new URLSearchParams(exchange.body).get('redirect_uri')).toBe(`${PUBLIC_URL}/oauth/callback`);
-    expect(store.snapshot().users.U1).toEqual({ userId: 'U1', name: 'Almir', token: 'xoxp-1' });
+    expect(store.snapshot().users.U1).toMatchObject({ userId: 'U1', name: 'Almir', token: 'xoxp-1' });
+    expect(store.snapshot().users.U1.session).toBe('nonce-1');
     const session = setCookies(res).find((c) => c.startsWith(`${SESSION_COOKIE}=`)) as string;
     expect(session).toContain('Path=/voice;');
     expect(session).toContain('Max-Age=2592000');
@@ -169,6 +171,17 @@ describe('sign in with Slack', () => {
 
     expect(store.snapshot().users).toEqual({});
     expect(slack.recorded.find((r) => r.method === 'oauth.v2.access')).toBeUndefined();
+  });
+
+  test('a nonce is one-use: replaying the same cookie and state is refused', async () => {
+    const start = await get('/voice/oauth/start');
+    const nonceCookie = (setCookies(start)[0] as string).split(';')[0];
+    expect((await get('/voice/oauth/callback?code=abc&state=nonce-1', { cookie: nonceCookie })).status).toBe(302);
+
+    const replay = await get('/voice/oauth/callback?code=abc&state=nonce-1', { cookie: nonceCookie });
+
+    expect(replay.status).toBe(400);
+    expect(slack.recorded.filter((r) => r.method === 'oauth.v2.access')).toHaveLength(1);
   });
 
   test('a user from another workspace is refused', async () => {
@@ -198,9 +211,18 @@ describe('gated routes', () => {
   });
 
   test('a cookie for a user no longer in the store is 401', async () => {
-    const cookie = `${SESSION_COOKIE}=${await createCookieSigner(SECRET).sign('U-GONE')}`;
+    const cookie = `${SESSION_COOKIE}=${await createCookieSigner(SECRET).sign('U-GONE:sess')}`;
 
     expect((await get('/voice/me', { cookie })).status).toBe(401);
+  });
+
+  test('a cookie from an earlier login dies when the person signs in again', async () => {
+    const old = await signedInCookie('U1', 'sess-old');
+    expect((await get('/voice/me', { cookie: old })).status).toBe(200);
+
+    await store.update((s) => { s.users.U1.session = 'sess-new'; }); // what a fresh callback does
+
+    expect((await get('/voice/me', { cookie: old })).status).toBe(401);
   });
 
   test('/me and /channels work when signed in, and only task channels are offered', async () => {
@@ -244,14 +266,17 @@ describe('gated routes', () => {
     expect((await post(`/voice/calls/${callId}/end`, {}, { cookie })).status).toBe(404);
   });
 
-  test('logout removes the token and expires the cookie', async () => {
+  test('logout ends the person\'s live calls, removes the token and expires the cookie', async () => {
     const cookie = await signedInCookie();
+    const { callId } = await (await post('/voice/calls', { channel: 'C1' }, { cookie })).json() as { callId: string };
 
     const res = await post('/voice/logout', {}, { cookie });
 
     expect(res.status).toBe(200);
     expect(setCookies(res)[0]).toContain('Max-Age=0');
     expect(store.snapshot().users).toEqual({});
+    expect(store.snapshot().calls[callId]).toBeUndefined();
+    expect(slack.recorded.some((r) => r.method === 'calls.end')).toBe(true);
     expect((await get('/voice/me', { cookie })).status).toBe(401);
   });
 

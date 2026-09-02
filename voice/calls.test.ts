@@ -108,6 +108,26 @@ describe('creating a call', () => {
     expect(JSON.stringify(created)).not.toContain('"g"');
   });
 
+  test('two first calls at the same instant create one card, not two', async () => {
+    await Promise.all([calls.create(ALICE, 'C1'), calls.create(BOB, 'C1')]);
+
+    expect(apis.calls('calls.add')).toHaveLength(1);
+    expect(apis.calls('calls.participants.add')).toHaveLength(1);
+  });
+
+  test('a person\'s second tab is not a second participant, and leaving one tab keeps them on the card', async () => {
+    const first = await calls.create(ALICE, 'C1');
+    const second = await calls.create(ALICE, 'C1');
+    expect(apis.calls('calls.participants.add')).toHaveLength(0);
+
+    await calls.end(ALICE, first.callId);
+    expect(apis.calls('calls.participants.remove')).toHaveLength(0);
+    expect(apis.calls('calls.end')).toHaveLength(0);
+
+    await calls.end(ALICE, second.callId);
+    expect(apis.calls('calls.end')).toHaveLength(1);
+  });
+
   test('a second person in the same channel joins the existing card instead of creating one', async () => {
     await calls.create(ALICE, 'C1');
     await calls.create(BOB, 'C1');
@@ -203,6 +223,18 @@ describe('post_to_channel', () => {
 
     await expect(calls.tool(ALICE, second.callId, { id: 'p20', name: 'post_to_channel', args: { text: 'one too many' } })).rejects.toMatchObject({ status: 429 });
     await expect(calls.tool(BOB, (await calls.create(BOB, 'C1')).callId, { id: 'b', name: 'post_to_channel', args: { text: 'bob is fine' } })).resolves.toMatchObject({ ok: true });
+  });
+
+  test('two concurrent deliveries of the same Gemini id post once and share the result', async () => {
+    const created = await calls.create(ALICE, 'C1');
+
+    const [a, b] = await Promise.all([
+      calls.tool(ALICE, created.callId, { id: 'dup', name: 'post_to_channel', args: { text: 'once' } }),
+      calls.tool(ALICE, created.callId, { id: 'dup', name: 'post_to_channel', args: { text: 'once' } }),
+    ]);
+
+    expect(a).toEqual(b);
+    expect(apis.calls('chat.postMessage').filter((c) => !Array.isArray(c.body.blocks))).toHaveLength(1);
   });
 
   test('a dead token signs the user out: 401 and the callback fires', async () => {
@@ -358,6 +390,30 @@ describe('ending calls', () => {
     expect(store.snapshot().calls).toEqual({});
     expect(store.snapshot().cards).toEqual({});
     fresh.stop();
+  });
+
+  test('boot cleanup keeps a card whose end failed, for the next try', async () => {
+    await calls.create(ALICE, 'C1');
+    calls.stop();
+    apis.recorded.length = 0;
+    apis.script('calls.end', [{ status: 200, body: { ok: false, error: 'internal_error' } }]);
+    const fresh = await makeCalls();
+
+    await fresh.bootCleanup();
+
+    expect(store.snapshot().calls).toEqual({});
+    expect(Object.keys(store.snapshot().cards)).toEqual(['C1']);
+    fresh.stop();
+  });
+
+  test('endAllForUser ends every call of one person and nobody else\'s', async () => {
+    await calls.create(ALICE, 'C1');
+    await calls.create(ALICE, 'C2');
+    const bob = await calls.create(BOB, 'C1');
+
+    await calls.endAllForUser(ALICE);
+
+    expect(Object.values(store.snapshot().calls).map((c) => c.callId)).toEqual([bob.callId]);
   });
 
   test('the reaper ends a call idle for 30 minutes', async () => {

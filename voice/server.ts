@@ -26,7 +26,7 @@ const publicUrl = required('PUBLIC_URL').replace(/\/+$/, '');
 const basePath = (process.env.BASE_PATH ?? new URL(publicUrl).pathname).replace(/\/+$/, '');
 const configDir = process.env.VOICE_DESK_DIR ?? join(homedir(), '.config', 'voice-desk');
 const store = await createStore(join(configDir, 'state.json'));
-const slack = { fetch };
+const slack = { fetch, log };
 
 const calls = new Calls({
   store,
@@ -55,7 +55,7 @@ const app = createApp({
   store,
   sessionSecret: required('SESSION_SECRET'),
   calls,
-  channels: { slack, bindingsFile: required('DYNAMIC_CHANNELS_FILE') },
+  channels: { slack, bindingsFile: required('DYNAMIC_CHANNELS_FILE'), botUserId: required('SLACK_BOT_USER_ID') },
   publicDir: resolve(import.meta.dir, 'public'),
   log,
 });

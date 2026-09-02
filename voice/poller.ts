@@ -53,11 +53,15 @@ function truncate(text: string): string {
  * updated `seen` map to feed into the next call. Pure.
  */
 export function settle(history: HistoryMessage[], input: SettleInput): { settled: SettledReply[]; seen: SeenMap } {
-  const seen: SeenMap = {};
+  // Start from what we already know: a candidate that fell outside this
+  // page (the page is the newest 50) keeps its quiet count and delivery state.
+  const seen: SeenMap = Object.fromEntries(Object.entries(input.seen).filter(([ts]) => newerThan(ts, input.since)));
   const settled: SettledReply[] = [];
 
+  // Slack bot-authored messages carry both `user` and `bot_id`; the exact
+  // bot user id is the only filter (review finding: `!bot_id` dropped them all).
   const candidates = history
-    .filter((m) => m.user === input.botUserId && !m.bot_id)
+    .filter((m) => m.user === input.botUserId)
     .filter((m) => !m.subtype)
     .filter((m) => typeof m.text === 'string' && m.text.trim().length > 0)
     .filter((m) => newerThan(m.ts, input.since))
