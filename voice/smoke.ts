@@ -20,6 +20,8 @@ if (!apiKey) {
   process.exit(2);
 }
 const model = process.argv[2] ?? process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL;
+/** Hold the tool response this long: does the model keep talking meanwhile (NON_BLOCKING honoured) or go silent? */
+const holdMs = Number(process.env.SMOKE_HOLD_TOOL_MS ?? '0');
 
 function fail(step: string, detail: unknown): never {
   console.error(`smoke FAILED at ${step}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
@@ -42,6 +44,11 @@ const timeout = setTimeout(() => fail('timeout', 'no answer within 30 s'), 30_00
 let sawSetup = false;
 let sawToolCall = false;
 let sawAudio = false;
+let toolCallAt = 0;
+let toolAnsweredAt = 0;
+let audioWhileHolding = 0;
+let extraCallsWhileHolding = 0;
+let transcriptWhileHolding = '';
 
 ws.addEventListener('open', () => ws.send(JSON.stringify(setupMessage(setup))));
 ws.addEventListener('error', (e) => fail('socket', String((e as ErrorEvent).message ?? e)));
@@ -57,18 +64,31 @@ ws.addEventListener('message', async (event) => {
       ws.send(JSON.stringify(textTurnMessage('Please tell Claude: run the smoke test and report the result.')));
     } else if (ev.type === 'toolCall') {
       const post = ev.calls.find((c) => c.name === 'post_to_channel');
-      if (!post) fail('toolCall', `expected post_to_channel, got ${ev.calls.map((c) => c.name).join(',')}`);
-      sawToolCall = true;
-      console.log(`ok  toolCall post_to_channel args=${JSON.stringify(post.args)}`);
-      ws.send(JSON.stringify(toolResponse([{ id: post.id, name: post.name, response: { posted: true }, scheduling: 'INTERRUPT' }])));
-      for (const c of ev.calls.filter((c) => c.name !== 'post_to_channel')) {
-        ws.send(JSON.stringify(toolResponse([{ id: c.id, name: c.name, response: { waiting: true }, scheduling: 'SILENT', willContinue: false }])));
+      const others = ev.calls.filter((c) => c.name !== 'post_to_channel');
+      // Anything the model asks for while the first answer is held is evidence it did not block.
+      if (toolCallAt && !toolAnsweredAt) extraCallsWhileHolding += ev.calls.length;
+      for (const c of others) {
+        ws.send(JSON.stringify(toolResponse([{ id: c.id, name: c.name, response: c.name === 'wait_for_reply' ? { waiting: true } : { ok: true }, scheduling: 'SILENT', willContinue: false }])));
       }
-    } else if (ev.type === 'audio' && !sawAudio) {
-      sawAudio = true;
-      console.log(`ok  audio back (${ev.mimeType})`);
+      if (!post) continue;
+      if (sawToolCall) continue;
+      sawToolCall = true;
+      toolCallAt = Date.now();
+      console.log(`ok  toolCall post_to_channel args=${JSON.stringify(post.args)}${holdMs ? ` (holding the answer ${holdMs} ms)` : ''}`);
+      setTimeout(() => {
+        toolAnsweredAt = Date.now();
+        if (holdMs) {
+          const busy = audioWhileHolding > 0 || extraCallsWhileHolding > 0;
+          console.log(`    while holding: ${audioWhileHolding} audio chunks, ${extraCallsWhileHolding} further tool calls, said: ${JSON.stringify(transcriptWhileHolding.trim())} → ${busy ? 'NON_BLOCKING honoured (model carried on)' : 'model went silent (blocking)'}`);
+        }
+        ws.send(JSON.stringify(toolResponse([{ id: post.id, name: post.name, response: { posted: true }, scheduling: 'INTERRUPT' }])));
+      }, holdMs);
+    } else if (ev.type === 'audio') {
+      if (toolCallAt && !toolAnsweredAt) audioWhileHolding++;
+      if (!sawAudio && (toolAnsweredAt || !holdMs)) { sawAudio = true; console.log(`ok  audio back (${ev.mimeType})`); }
     } else if (ev.type === 'outputTranscript') {
-      console.log(`    desk says: ${ev.text}`);
+      if (toolCallAt && !toolAnsweredAt) transcriptWhileHolding += ev.text;
+      else console.log(`    desk says: ${ev.text}`);
     }
     if (sawSetup && sawToolCall && sawAudio) {
       clearTimeout(timeout);

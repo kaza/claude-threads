@@ -36,6 +36,10 @@ const calls = new Calls({
   publicUrl,
   model: process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL,
   voiceName: process.env.GEMINI_VOICE ?? 'Aoede',
+  // A model that runs tools sequentially (3.1 Flash Live, measured 2026-09-02)
+  // is silent for the whole wait; give it control back quickly. The async
+  // 2.5 native-audio model keeps talking, so the long wait is fine there.
+  waitDeadlineMs: process.env.WAIT_DEADLINE_MS ? Number(process.env.WAIT_DEADLINE_MS) : undefined,
   now: () => Date.now(),
   log,
   onTokenDead: (userId) =>
