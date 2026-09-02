@@ -1,5 +1,11 @@
 # Claude Code Instructions for claude-threads
 
+> **VVS checkout — read [VVS.md](VVS.md) before you commit.** This is the `vvs`
+> integration branch of VVS's fork. Never commit to `vvs` directly: a change goes to
+> its `pr/<feature>` (upstream-shaped) or `local/<feature>` (ours only) branch, cut
+> from `main`, and reaches `vvs` by merge. Upstream is `anneschuth/claude-threads`;
+> `main` mirrors it. The rest of this file is upstream's and applies unchanged.
+
 ## What This Project Does
 
 This is a multi-platform bot that lets users interact with Claude Code through chat platforms. When someone @mentions the bot in a channel, it spawns a Claude Code CLI session in a configured working directory and streams all output to a thread. The user can continue the conversation by replying in the thread.
