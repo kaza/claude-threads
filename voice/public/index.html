@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>voice-desk</title>
+  <link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+  <main>
+    <h1>voice-desk</h1>
+    <p class="sub">Talk to the agent in a Slack task channel. Everything you say is posted there as you.</p>
+
+    <section id="signin" hidden>
+      <a class="button" href="oauth/start">Sign in with Slack</a>
+    </section>
+
+    <section id="desk" hidden>
+      <p>Signed in as <strong id="who"></strong> · <button id="logout" class="link">sign out</button></p>
+      <label for="channel">Task channel</label>
+      <select id="channel"></select>
+      <div class="row">
+        <button id="talk" class="button">Talk</button>
+        <button id="hangup" class="button danger" hidden>Hang up</button>
+        <span id="status" class="status">idle</span>
+      </div>
+      <ol id="transcript" class="transcript" aria-live="polite"></ol>
+    </section>
+
+    <p id="error" class="error" hidden></p>
+  </main>
+  <script type="module" src="static/app.js"></script>
+</body>
+</html>

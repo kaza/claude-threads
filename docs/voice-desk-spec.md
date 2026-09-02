@@ -12,7 +12,7 @@ hostname, not the smallest thing that works.
 
 A small web service on the agent box. You sign in with Slack, pick a **task
 channel**, press *Talk*. Your browser opens a WebSocket straight to Google's
-**Gemini Live API** (`gemini-live-2.5-flash-native-audio`), which acts as a
+**Gemini Live API** (`gemini-2.5-flash-native-audio-preview-12-2025`), which acts as a
 **front desk**: it relays what you say into the Slack channel *as you*, keeps the
 conversation going while Claude Code works, and reads the agent's reply back
 when it lands. Teammates see the whole exchange in the channel, and a Slack
@@ -51,7 +51,7 @@ Live gives us three things the design wants:
   `wait_for_reply` run while the model keeps talking; the tool response carries
   `scheduling: INTERRUPT` (a reply landed) or `SILENT` (still waiting).
   ⚠️ Only the **2.5 native-audio** model supports this today; 3.1 Flash Live
-  runs tools sequentially, which would mean dead air. So: `gemini-live-2.5-flash-native-audio`.
+  runs tools sequentially, which would mean dead air. So: `gemini-2.5-flash-native-audio-preview-12-2025` (the AI Studio id; verified against `GET /v1beta/models` with the key before anything is called ready).
 - Croatian works, voices are decent (`Aoede` default), and audio is roughly a
   quarter of OpenAI's price.
 
@@ -83,12 +83,22 @@ voice-desk, results returned as `toolResponse` with the Gemini call id):
 
 | Tool | Behaviour | Does |
 |---|---|---|
-| `post_to_channel(text)` | NON_BLOCKING | `chat.postMessage` as the signed-in user, to the call's channel, text prefixed with `<@BOT_USER_ID>` so a cold channel spawns a session and a live one just continues. Does **not** touch the reply cursor |
-| `wait_for_reply()` | NON_BLOCKING | takes the next settled agent replies from this call's mailbox (up to 25 s); returns them with `scheduling: INTERRUPT`, or `{ waiting: true }` with `SILENT` |
-| `end_call()` | blocking | leaves the call card, closes the session |
+| `post_to_channel(text)` | NON_BLOCKING | `chat.postMessage` as the signed-in user, to the call's channel, text prefixed with `<@BOT_USER_ID>` so a cold channel spawns a session and a live one just continues. Does **not** touch the reply cursor. Success answers `SILENT`, failure `INTERRUPT` so the person hears it |
+| `wait_for_reply()` | NON_BLOCKING | takes the next settled agent replies from this call's mailbox. The HTTP long-poll lasts up to 25 s; on `{ waiting: true }` the browser answers Gemini with `willContinue: true, scheduling: SILENT` (the function stays open) and polls again with the same call id, until replies arrive and it sends the final response with `scheduling: INTERRUPT`. A late reply therefore always wakes the model, even if the person stays silent |
+| `end_call()` | blocking | leaves the call card; the browser sends the blocking response, waits for the model's goodbye turn to complete, then closes the socket |
 
 No tool takes a channel, a timestamp or an id. Those live server-side in the
 call.
+
+**Wire shapes** (raw WebSocket, `v1beta`): the server sends
+`{ toolCall: { functionCalls: [{ id, name, args }] } }` (possibly several) and
+may send `{ toolCallCancellation: { ids: [...] } }`; the browser answers
+`{ toolResponse: { functionResponses: [{ id, name, response: {…}, scheduling, willContinue }] } }`
+— `scheduling` and `willContinue` are siblings of `response`, not inside it.
+Cancelled ids are dropped without a response. The client sends `{ setup }`
+first (the exact config the token was constrained with, returned by the
+server together with the token) and waits for `setupComplete` before any
+audio.
 
 ## Replies: one poller per channel, settled text only
 
@@ -101,7 +111,13 @@ having moved past that `ts`, never sees the rest. So:
   participant. A `429` sets a **workspace-wide** cooldown honouring `Retry-After`
   for every poller.
 - It tracks candidate messages by `ts`, keeps the last text seen, and marks a
-  message **settled** when its text is identical on two consecutive polls.
+  message **settled** when its text is identical on **three** consecutive
+  polls (~8 s quiet). That is not a completion signal — the daemon updates one
+  post through a whole turn, and a tool that runs for ten seconds leaves the
+  post quiet mid-turn — so a delivered post whose text changes again is
+  delivered **again** once it re-settles, flagged `updated: true`; the model
+  is told an updated reply supersedes the earlier one and to read only what is
+  new. Better than waiting for a signal the daemon does not emit.
   Only messages whose `user` is exactly `SLACK_BOT_USER_ID` count; file-only
   posts (the voice-reply mp3s), subtype messages and anything over 4 000
   characters (truncated with a note) are handled explicitly.
@@ -145,8 +161,8 @@ anyone outside the four uses it.
 |---|---|---|
 | `GET /` | cookie | the page (`/voice` redirects to `/voice/`) |
 | `GET /oauth/start`, `GET /oauth/callback`, `POST /logout` | — / cookie | above |
-| `GET /channels` | cookie | task channels: the daemon's dynamic-channel bindings when the file exists, else channels where **both** the user (`is_member`) and the bot (`conversations.members`) are members; excludes archived and externally shared channels; paginates |
-| `POST /calls {channel}` | cookie | creates a **call** `{ callId (random), userId, channel, mailbox, createdAt }`, joins or creates the channel's call card, mints the Gemini ephemeral token (constraints = model + instruction + tools + `sessionResumption` + sliding-window compression); returns `{ callId, token }` |
+| `GET /channels` | cookie | task channels: the daemon's dynamic-channel bindings file **is required** (thread-mode channels answer inside threads, which channel history never shows, so there is no safe fallback); of those, the ones the user is a member of, excluding archived and externally shared; paginates |
+| `POST /calls {channel}` | cookie | creates a **call** `{ callId (random), userId, channel, mailbox, createdAt }`, joins or creates the channel's call card, mints the Gemini ephemeral token (constraints = model + instruction + tools + `sessionResumption` + sliding-window compression + input/output transcription for the transcript pane); returns `{ callId, token, setup }` where `setup` is the exact config to send first |
 | `POST /calls/:id/token {resume}` | cookie, owner | a fresh one-use token for a reconnect, passing the resumption handle through |
 | `POST /calls/:id/tool {id, name, args}` | cookie, owner | executes one tool for that call. `id` is Gemini's call id, deduplicated per call; strict name/argument schema; text capped at 2 000 chars; 20 posts/min per user |
 | `POST /calls/:id/end` | cookie, owner | leaves the card (ends it when the last leg leaves), forgets the call |
@@ -158,10 +174,16 @@ workspace member can do through `/tool` exactly what they can do by typing in
 the channel.** That is the accepted threat model.
 
 **Reconnects.** Gemini closes a WebSocket after ~10 minutes and sends
-`sessionResumptionUpdate` handles along the way. The page keeps the latest
-handle, and on close (or `GoAway`) asks for a fresh token with the handle, then
-reconnects; the call and its mailbox are untouched. The user hears a short
-"reconnecting" tone, not a hang-up.
+`sessionResumptionUpdate { newHandle, resumable }` along the way; only
+`resumable: true` handles are kept. On `goAway { timeLeft }` the page
+reconnects *before* the close; on an unexpected close it reconnects with the
+last handle, with backoff (1, 2, 4 s, three tries) and one reconnect in
+flight at a time. With no valid handle it starts a fresh session and says so.
+The token's constraints always include compression and resumption, so the
+15-minute audio cap does not apply. The call and its mailbox are untouched.
+The user hears a short "reconnecting" tone, not a hang-up. The ephemeral
+token is *mitigated*, not moot: `uses: 1` bounds new sessions, the bearer
+lives until `expireTime` (30 min).
 
 ## Call card
 
@@ -179,7 +201,7 @@ back.
 | Var | What |
 |---|---|
 | `GEMINI_API_KEY` | ⚠️ **none exists in VVS today** — Almir provides one (Google AI Studio key on a VVS Google account; set a budget alert). Not the Gemini CLI's OAuth login |
-| `GEMINI_LIVE_MODEL` | default `gemini-live-2.5-flash-preview`. The 2.5 native-audio model carries different ids on AI Studio and Vertex; verified against `GET /v1beta/models` with the key at install, and it must be one that supports `NON_BLOCKING` tools |
+| `GEMINI_LIVE_MODEL` | default `gemini-2.5-flash-native-audio-preview-12-2025`. The 2.5 native-audio model carries different ids on AI Studio and Vertex; verified against `GET /v1beta/models` with the key at install, and it must be one that supports `NON_BLOCKING` tools |
 | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | from the Claude Code app's *Basic Information* |
 | `SLACK_TEAM_ID` | `T0BFTMW5H0W` |
 | `SLACK_BOT_USER_ID` | the Claude Code bot's user id, for the mention prefix and the reply filter |
@@ -233,12 +255,14 @@ voice/
   gemini.ts          mintEphemeralToken(deps, constraints)
   prompt.ts          FRONT_DESK_INSTRUCTION, TOOL_DECLARATIONS (with behavior), buildConstraints(model, resumeHandle?)
   session.ts         cookie sign/verify (HMAC-SHA256 via WebCrypto), one-use oauth nonce, the JSON store (users, calls, cards) with atomic writes and a single writer queue
-  channels.ts        task-channel resolution: bindings file, else membership rules
+  channels.ts        task-channel resolution from the daemon's bindings file
   poller.ts          one poller per channel; settled-text rule; fan-out to call mailboxes; workspace-wide 429 cooldown (fake clock injectable)
   calls.ts           call lifecycle: create, token, tool dispatch (dedupe by Gemini id, rate limit), end; card join/leave; reaper
   public/index.html  the page: sign-in, channel picker, Talk button, transcript pane
-  public/app.js      WebSocket to Gemini Live, AudioWorklet capture (16 kHz PCM), playback (24 kHz), toolCall → /calls/:id/tool → toolResponse, resumption
+  public/live.js     pure, testable protocol helpers: classify server messages, build toolResponse envelopes, PCM float→int16 and resampling, base64
+  public/app.js      WebSocket to Gemini Live, AudioWorklet capture (mono 16-bit LE PCM, 16 kHz, 50 ms chunks), scheduled 24 kHz playback with flush on `interrupted`, `audioStreamEnd` on mic stop, toolCall → /calls/:id/tool → toolResponse, GoAway/resumption
   public/worklet.js  the capture processor
+  smoke.ts           gated live smoke (needs GEMINI_API_KEY): mints a token, opens the constrained socket, sends setup, expects setupComplete, sends a text turn that must produce a post_to_channel toolCall, answers it, expects audio back; fails loudly on any missing capability
   voice-desk.service systemd unit
   README.md
 ```
@@ -248,15 +272,17 @@ Tests (`bun test voice/`), each with fake `fetch` and a fake clock injected thro
 1. cookie: sign/verify round trip; tampered → rejected; missing → 401 on every gated route; attributes (`__Secure-` name, `Path`, `Secure`, `HttpOnly`, `SameSite=Lax`, expiry).
 2. oauth: start sets the nonce cookie; callback with matching nonce exchanges the code (`user_scope`, full public redirect URI), stores `authed_user.access_token`, fetches the name, sets the cookie, clears the nonce; foreign `team.id` → 403; missing/mismatched/reused nonce → 400; Slack error callback → clean page, nothing stored.
 3. origin/CSRF: a mutating request without `Origin` or with a foreign one → 403; non-JSON content type → 415.
-4. channels: bindings file wins when present; otherwise only channels where the user is a member **and** the bot is in `conversations.members`; archived and ext-shared excluded; pagination followed.
+4. channels: only bound channels the user is a member of; archived and ext-shared excluded; a missing or malformed bindings file is an error; pagination followed.
 5. calls: `POST /calls` creates a call with a random id owned by the user; a second tab gets a second call and its tools never touch the first; another user's call id → 404; the token request carries the model, instruction, three declarations with behaviour, `uses: 1`, short expiry, resumption and compression; `/token {resume}` passes the handle through; the response never contains the API key.
 6. `post_to_channel`: posts as the owner to the call's channel with the mention prefix; a channel in the args is ignored; 429 with `Retry-After` → `{ error }` and no retry; text over the cap → 400; 21st post in a minute → 429 locally; same Gemini id twice → the first result, one Slack call.
-7. poller (fake clock): a bot message whose text changed between polls is not delivered; identical twice → delivered once to every mailbox in `ts` order; humans, other bots, file-only and subtype messages skipped; long text truncated with a note; a 429 pauses every poller until `Retry-After`; a human post during a wait skips nothing.
+7. poller (fake clock): a bot message whose text changed between polls is not delivered; identical on three polls → delivered once to every mailbox in `ts` order; a delivered post that changes and re-settles is delivered again flagged `updated`; humans, other bots, file-only and subtype messages skipped; long text truncated with a note; a 429 pauses every poller until `Retry-After`; a human post during a wait skips nothing.
 8. `wait_for_reply`: `{ waiting: true }` at the 25 s deadline; delivered replies carry `INTERRUPT`; a call that joins later does not receive earlier replies.
 9. cards: first participant creates card + block; second is added; leaving removes; last leave ends; post failure rolls the card back; boot ends persisted cards; reaper ends a 30-minute-idle call.
 10. store: two concurrent writes serialise; a crash between temp file and rename leaves the old file intact; a symlinked store path is refused.
 11. logout: token removed, cookie expired; a Slack `invalid_auth` on a tool → user removed, 401.
-12. instruction contains the relay rules, the injection rule, the "parts" rule and the three tool names.
+12. instruction contains the relay rules, the injection rule, the "parts"/"updated" rule and the three tool names.
+13. `public/live.js` (pure): server messages classified (setupComplete, audio parts, transcriptions, toolCall with several calls, toolCallCancellation, goAway, sessionResumptionUpdate); toolResponse envelopes carry `id`, `name`, `response`, sibling `scheduling`/`willContinue`; float→int16 clipping; 48 kHz→16 kHz resampling length and content; base64 round trip.
+14. smoke (gated, not in CI): as described above; the model must accept the constrained token, `NON_BLOCKING`, compression and resumption.
 
 ## Arbitration of the pre-code reviews (2026-09-02)
 
@@ -268,13 +294,13 @@ Tests (`bun test voice/`), each with fake `fetch` and a fake clock injected thro
 | 4 | OAuth state must be one-use and browser-bound | Codex | **must**: nonce cookie |
 | 5 | cookie path under the prefix | Codex, Gemini | **must**: explicit `Path`, `__Secure-` name, attributes tested |
 | 6 | CSRF / provenance on `/tool` | Codex | **must** for CSRF (Origin + JSON), dedupe by Gemini id, rate limits; provenance from Gemini is *not* provable and the threat model says so |
-| 7 | ephemeral bearer reusable | Codex | moot for Gemini (`uses: 1`, constraints); expiry in minutes |
+| 7 | ephemeral bearer reusable | Codex | mitigated for Gemini (`uses: 1`, constraints); resumption does not consume a use and the bearer lives to `expireTime`, 30 min |
 | 8 | channel authorisation | Codex | **must**: bindings file or user+bot membership, archived/ext-shared excluded |
 | 9 | `not_in_channel` was wrong | Codex | **must**: bot membership checked before the channel is offered |
-| 10 | non-DCM channels reply in threads | Codex | **must**: picker restricted to task channels |
+| 10 | non-DCM channels reply in threads | Codex | **must**: picker restricted to the daemon's bound task channels; the membership fallback was dropped in round 2 because it would have offered thread-mode channels |
 | 11 | one session per user, cross-tab confusion | Codex | **must**: calls keyed by random id |
 | 12 | concurrent post/wait skips replies | Codex | **must**: mailboxes, human posts never advance |
-| 13 | function-call loop details | Codex | folded into the Gemini `toolCall`/`toolResponse` design |
+| 13 | function-call loop details | Codex | **must** (round 2): wire shapes, several calls, cancellation, `willContinue` for the long wait, scheduling per tool, `end_call` ordering, all written down above |
 | 14 | polling rate limits | Codex, Gemini | **must**: one poller per channel, workspace-wide cooldown, ceiling documented |
 | 15 | bot filter too broad | Codex | **must**: exact bot user id, subtypes and file-only skipped |
 | 16 | `since_ts` in tool args | Codex | **must**: no tool takes ids or timestamps |
@@ -288,6 +314,11 @@ Tests (`bun test voice/`), each with fake `fetch` and a fake clock injected thro
 | — | Gemini: prompt injection via read-aloud text | Gemini, Fable | **must**: instruction rule; only relay tools exist |
 | — | Gemini: put the token in an encrypted cookie, no disk | Gemini | rejected: the calls and cards need disk anyway; a Slack token in a cookie is worse on a stolen laptop |
 | — | Gemini: diagnostics | Gemini | **worth**: durations, statuses, `Retry-After`, call id on every line |
+| — | round 2: retired model id | Codex | **must**: `gemini-2.5-flash-native-audio-preview-12-2025`, verified live |
+| — | round 2: late replies lost after the 25 s wait | Codex | **must**: `willContinue` keeps the function open |
+| — | round 2: quiet ≠ complete | Codex | **must**: three quiet polls plus re-delivery on later change; the daemon emits no completion signal to use instead |
+| — | round 2: no protocol tests, no live smoke | Codex | **must**: `public/live.js` pure helpers under test; gated `smoke.ts` |
+| — | round 2: transcript pane has no source | Codex | **must**: input/output transcription in the locked setup |
 
 ## Decisions
 
