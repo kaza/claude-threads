@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { SlackError, callsAdd, isTokenDead, listChannels, oauthAccess, postMessage, history } from './slack.js';
+import { SlackError, callsAdd, isTokenDead, listChannels, oauthAccess, postMessage, history, userName, postCallBlock } from './slack.js';
 
 type Recorded = { url: string; init: RequestInit };
 
@@ -33,6 +33,30 @@ describe('oauthAccess', () => {
     const { fn } = fakeSlack({ 'oauth.v2.access': [{ body: { ok: true, team: { id: 'T1' }, access_token: 'xoxb-bot-only' } }] });
 
     await expect(oauthAccess({ fetch: fn }, { clientId: 'c', clientSecret: 's', code: 'x', redirectUri: 'r' })).rejects.toThrow('missing_user_token');
+  });
+});
+
+describe('argument encoding', () => {
+  // Seen live 2026-09-02: users.info answered user_not_found because the user id
+  // travelled in a JSON body, which Slack's read methods silently ignore.
+  test('arguments are form-encoded, the one encoding every Slack method accepts', async () => {
+    const { fn, calls } = fakeSlack({ 'users.info': [{ body: { ok: true, user: { real_name: 'Almir' } } }] });
+
+    const name = await userName({ fetch: fn }, 'xoxp', 'U1');
+
+    expect(name).toBe('Almir');
+    expect((calls[0].init.headers as Record<string, string>)['Content-Type']).toContain('x-www-form-urlencoded');
+    expect(new URLSearchParams(calls[0].init.body as string).get('user')).toBe('U1');
+  });
+
+  test('nested arguments (blocks) travel as JSON strings inside the form', async () => {
+    const { fn, calls } = fakeSlack({ 'chat.postMessage': [{ body: { ok: true, ts: '1' } }] });
+
+    await postCallBlock({ fetch: fn }, 'xoxp', 'C1', 'R1');
+
+    const body = new URLSearchParams(calls[0].init.body as string);
+    expect(body.get('channel')).toBe('C1');
+    expect(JSON.parse(body.get('blocks') as string)).toEqual([{ type: 'call', call_id: 'R1' }]);
   });
 });
 
@@ -101,10 +125,10 @@ describe('callsAdd', () => {
     const result = await callsAdd({ fetch: fn }, 'xoxp', { externalUniqueId: 'C1-1', joinUrl: 'https://x/voice/?channel=C1', title: 'Voice', userId: 'U1' });
 
     expect(result).toEqual({ id: 'R1' });
-    const body = JSON.parse(calls[0].init.body as string);
-    expect(body.external_unique_id).toBe('C1-1');
-    expect(body.join_url).toBe('https://x/voice/?channel=C1');
-    expect(body.users).toEqual([{ slack_id: 'U1' }]);
+    const body = new URLSearchParams(calls[0].init.body as string);
+    expect(body.get('external_unique_id')).toBe('C1-1');
+    expect(body.get('join_url')).toBe('https://x/voice/?channel=C1');
+    expect(JSON.parse(body.get('users') as string)).toEqual([{ slack_id: 'U1' }]);
     expect((calls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer xoxp');
   });
 });
