@@ -38,10 +38,14 @@ function status(text) { el.status.textContent = text; }
 function showError(err) { el.error.hidden = false; el.error.textContent = String(err?.message ?? err); }
 function clearError() { el.error.hidden = true; el.error.textContent = ''; }
 
+// Server long-polls last at most 25 s; anything past 40 s is a hung connection, not a slow answer.
+const API_TIMEOUT_MS = 40000;
+
 async function api(path, body) {
+  const signal = AbortSignal.timeout(API_TIMEOUT_MS);
   const res = await fetch(path, body === undefined
-    ? { credentials: 'same-origin' }
-    : { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    ? { credentials: 'same-origin', signal }
+    : { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
   if (res.status === 401) { showSignedOut(); throw new Error('signed out; sign in again'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -87,7 +91,7 @@ async function connect(token) {
     ws.addEventListener('message', onMessage);
   });
   ws.addEventListener('message', (event) => void onServerMessage(event));
-  ws.addEventListener('close', () => void onSocketClosed());
+  ws.addEventListener('close', (event) => void onSocketClosed(ws, event));
   call.tries = 0;
   status('listening');
 }
@@ -109,9 +113,10 @@ async function onServerMessage(event) {
   }
 }
 
-async function onSocketClosed() {
-  if (!call || call.ended || call.reconnecting) return;
-  status('reconnecting…');
+async function onSocketClosed(ws, event) {
+  // A close of a socket we already replaced (goAway reconnect) is not news.
+  if (!call || call.ended || call.reconnecting || ws !== call.ws) return;
+  status(`reconnecting… (socket closed ${event.code})`);
   await reconnect();
 }
 

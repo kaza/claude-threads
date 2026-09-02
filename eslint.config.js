@@ -16,7 +16,7 @@ export default tseslint.config(
       globals: {
         window: 'readonly', document: 'readonly', location: 'readonly', navigator: 'readonly', console: 'readonly',
         fetch: 'readonly', WebSocket: 'readonly', Blob: 'readonly', URLSearchParams: 'readonly',
-        setTimeout: 'readonly', clearTimeout: 'readonly', btoa: 'readonly', atob: 'readonly',
+        setTimeout: 'readonly', clearTimeout: 'readonly', btoa: 'readonly', atob: 'readonly', AbortSignal: 'readonly',
         AudioContext: 'readonly', AudioWorkletNode: 'readonly', AudioWorkletProcessor: 'readonly',
         registerProcessor: 'readonly', sampleRate: 'readonly',
       },

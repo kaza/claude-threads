@@ -70,6 +70,9 @@ interface ChannelPoller {
   inFlight: boolean;
 }
 
+/** A delivered post older than this is assumed final; the poll cursor may move past it. */
+const EDIT_HORIZON_MS = 10 * 60 * 1000;
+
 function slackTs(ms: number): string {
   return (ms / 1000).toFixed(6);
 }
@@ -303,6 +306,16 @@ export class Calls {
       const messages = await history(this.deps.slack, tokenOwner.token, channel, poller.since);
       const { settled, seen } = settle(messages, { botUserId: this.deps.botUserId, seen: poller.seen, since: poller.since });
       poller.seen = seen;
+      // Advance the cursor past posts old enough that the daemon will not edit
+      // them again, so a long session does not re-fetch its whole history on
+      // every poll. Younger posts stay visible for the settled/updated rule.
+      const horizon = (this.deps.now() - EDIT_HORIZON_MS) / 1000;
+      for (const ts of Object.keys(seen)) {
+        if (parseFloat(ts) < horizon && seen[ts].delivered !== undefined && parseFloat(ts) > parseFloat(poller.since)) {
+          poller.since = ts;
+          delete poller.seen[ts];
+        }
+      }
       for (const call of calls) {
         const mailbox = this.mailboxes.get(call.callId);
         if (!mailbox) continue;

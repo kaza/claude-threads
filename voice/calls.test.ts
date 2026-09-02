@@ -275,6 +275,25 @@ describe('wait_for_reply and the poller', () => {
     expect((result as unknown as { result: { replies: unknown[] } }).result.replies).toHaveLength(1);
   });
 
+  test('the poll cursor moves past delivered posts older than ten minutes, and not before', async () => {
+    await calls.create(ALICE, 'C1');
+    clock += 60_000;
+    const ts = (clock / 1000).toFixed(6); // a reply a minute into the call
+    for (const history of Array(QUIET_POLLS).fill([{ ts, user: BOT, text: 'Done.' }])) {
+      apis.setHistory(history);
+      await calls.pollOnce('C1');
+    }
+    const before = apis.calls('conversations.history').at(-1)?.body.oldest;
+    clock += 11 * 60 * 1000;
+    await calls.pollOnce('C1');
+    await calls.pollOnce('C1');
+
+    const after = apis.calls('conversations.history').at(-1)?.body.oldest;
+
+    expect(parseFloat(String(before))).toBeLessThan(parseFloat(ts));
+    expect(after).toBe(ts);
+  });
+
   test('a 429 from history pauses every poller until Retry-After', async () => {
     await calls.create(ALICE, 'C1');
     await calls.create(BOB, 'C2');
