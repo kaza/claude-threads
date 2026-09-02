@@ -164,7 +164,7 @@ describe('creating a call', () => {
 
     const mints = apis.calls('auth_tokens');
     expect(mints).toHaveLength(2);
-    expect((mints[1].body.liveConnectConstraints as { config: { sessionResumption: unknown } }).config.sessionResumption).toEqual({ handle: 'handle-9' });
+    expect((mints[1].body.bidiGenerateContentSetup as { sessionResumption: unknown }).sessionResumption).toEqual({ handle: 'handle-9' });
   });
 
   test('another user cannot touch the call', async () => {

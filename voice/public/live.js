@@ -129,6 +129,13 @@ export function base64ToInt16(base64) {
   return new Int16Array(bytes.buffer, 0, Math.floor(bytes.length / 2));
 }
 
+/** A WebSocket message's payload as text: string, Blob (browsers) or ArrayBuffer/Buffer (Bun) all occur. */
+export async function frameText(data) {
+  if (typeof data === 'string') return data;
+  if (data && typeof data.text === 'function') return data.text();
+  return new TextDecoder().decode(data);
+}
+
 /** Sample rate from a mimeType like `audio/pcm;rate=24000`, default 24000. */
 export function rateOf(mimeType) {
   const m = /rate=(\d+)/.exec(mimeType ?? '');

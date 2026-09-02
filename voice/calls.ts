@@ -8,7 +8,7 @@
  */
 
 import { mintEphemeralToken, type GeminiDeps } from './gemini.js';
-import { buildConstraints } from './prompt.js';
+import { buildSetup } from './prompt.js';
 import { QUIET_POLLS, settle, type SeenMap, type SettledReply } from './poller.js';
 import type { Store, StoredCall, StoredUser } from './session.js';
 import {
@@ -131,10 +131,10 @@ export class Calls {
 
   private async mint(callId: string, resumeHandle?: string): Promise<{ token: string; setup: unknown }> {
     const started = this.deps.now();
-    const constraints = buildConstraints({ model: this.deps.model, voiceName: this.deps.voiceName, resumeHandle });
+    const setup = buildSetup({ model: this.deps.model, voiceName: this.deps.voiceName, resumeHandle });
     const minted = await mintEphemeralToken(this.deps.gemini, { model: this.deps.model, voiceName: this.deps.voiceName, resumeHandle });
     this.deps.log(`call=${callId} token minted in ${this.deps.now() - started}ms${resumeHandle ? ' (resume)' : ''}`);
-    return { token: minted.name, setup: { model: constraints.model, ...constraints.config } };
+    return { token: minted.name, setup };
   }
 
   async end(user: StoredUser, callId: string): Promise<void> {

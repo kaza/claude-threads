@@ -14,6 +14,7 @@ import {
   classify,
   downsample,
   floatTo16BitPCM,
+  frameText,
   int16ToBase64,
   pcm16ToFloat,
   rateOf,
@@ -103,7 +104,7 @@ async function connect(token, setup) {
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Gemini did not complete setup')), 10000);
     const onMessage = async (event) => {
-      const data = typeof event.data === 'string' ? event.data : await event.data.text();
+      const data = await frameText(event.data);
       if (JSON.parse(data).setupComplete) { clearTimeout(timer); ws.removeEventListener('message', onMessage); resolve(); }
     };
     ws.addEventListener('message', onMessage);
@@ -116,7 +117,7 @@ async function connect(token, setup) {
 }
 
 async function onServerMessage(event) {
-  const data = typeof event.data === 'string' ? event.data : await event.data.text();
+  const data = await frameText(event.data);
   for (const ev of classify(JSON.parse(data))) {
     switch (ev.type) {
       case 'audio': playChunk(ev.data, rateOf(ev.mimeType)); break;

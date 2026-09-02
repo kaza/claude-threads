@@ -43,9 +43,10 @@ intact and teammates see *who* said it.
 GPT-Live is a ChatGPT feature, not an API. Of the developer voice APIs, Gemini
 Live gives us three things the design wants:
 
-- **Server-locked sessions.** The ephemeral token is minted with
-  `live_connect_constraints` that pin the model, the system instruction and the
-  tool list, `uses: 1`, expiry in minutes. The browser cannot change what the
+- **Server-locked sessions.** The ephemeral token is minted with the full Live
+  setup as `bidiGenerateContentSetup` (⚠️ the docs call it `liveConnectConstraints`;
+  the live v1beta API rejects that name — verified by the smoke, 2026-09-02),
+  which pins the model, the system instruction and the tool list; `uses: 1`, expiry in minutes. The browser cannot change what the
   front desk is allowed to do, and a leaked token buys one constrained session.
 - **Async tools.** Declared `behavior: NON_BLOCKING`, `post_to_channel` and
   `wait_for_reply` run while the model keeps talking; the tool response carries
@@ -162,7 +163,7 @@ anyone outside the four uses it.
 | `GET /` | cookie | the page (`/voice` redirects to `/voice/`) |
 | `GET /oauth/start`, `GET /oauth/callback`, `POST /logout` | — / cookie | above |
 | `GET /channels` | cookie | task channels: the daemon's dynamic-channel bindings file **is required** (thread-mode channels answer inside threads, which channel history never shows, so there is no safe fallback); of those, the ones the user is a member of, excluding archived and externally shared; paginates |
-| `POST /calls {channel}` | cookie | creates a **call** `{ callId (random), userId, channel, mailbox, createdAt }`, joins or creates the channel's call card, mints the Gemini ephemeral token (constraints = model + instruction + tools + `sessionResumption` + sliding-window compression + input/output transcription for the transcript pane); returns `{ callId, token, setup }` where `setup` is the exact config to send first |
+| `POST /calls {channel}` | cookie | creates a **call** `{ callId (random), userId, channel, mailbox, createdAt }`, joins or creates the channel's call card, mints the Gemini ephemeral token whose `bidiGenerateContentSetup` is the full Live setup (model, `generationConfig` with audio modality and voice, instruction, tools, `sessionResumption`, sliding-window compression, input/output transcription); returns `{ callId, token, setup }` where `setup` is that same object, sent verbatim as the first message |
 | `POST /calls/:id/token {resume}` | cookie, owner | a fresh one-use token for a reconnect, passing the resumption handle through |
 | `POST /calls/:id/tool {id, name, args}` | cookie, owner | executes one tool for that call. `id` is Gemini's call id, deduplicated per call; strict name/argument schema; text capped at 2 000 chars; 20 posts/min per user |
 | `POST /calls/:id/end` | cookie, owner | leaves the card (ends it when the last leg leaves), forgets the call |
