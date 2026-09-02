@@ -38,7 +38,11 @@ const calls = new Calls({
   voiceName: process.env.GEMINI_VOICE ?? 'Aoede',
   now: () => Date.now(),
   log,
-  onTokenDead: (userId) => void store.update((s) => { delete s.users[userId]; }).then(() => log(`user=${userId} token dead, removed`)),
+  onTokenDead: (userId) =>
+    void store
+      .update((s) => { delete s.users[userId]; })
+      .then(() => log(`user=${userId} token dead, removed`))
+      .catch((err: unknown) => log(`user=${userId} token dead but removal failed: ${(err as Error).message}`)),
 });
 
 const app = createApp({

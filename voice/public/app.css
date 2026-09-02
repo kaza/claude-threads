@@ -19,3 +19,4 @@ select { width: 100%; padding: .5rem; font-size: 1rem; }
 @media (prefers-color-scheme: dark) { .transcript .desk { background: rgba(255, 255, 255, .08); } }
 .transcript .note { opacity: .6; font-size: .9rem; }
 .error { color: #b3261e; white-space: pre-wrap; }
+@media (prefers-color-scheme: dark) { .error { color: #ff8a80; } }

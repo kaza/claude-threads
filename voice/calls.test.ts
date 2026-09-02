@@ -127,6 +127,16 @@ describe('creating a call', () => {
     expect(store.snapshot().calls).toEqual({});
   });
 
+  test('a Gemini failure while minting leaves no card, no call and no Slack side effect', async () => {
+    apis.script('auth_tokens', [{ status: 500, body: { error: 'boom' } }]);
+
+    await expect(calls.create(ALICE, 'C1')).rejects.toThrow(/Gemini auth_tokens HTTP 500/);
+
+    expect(apis.calls('calls.add')).toHaveLength(0);
+    expect(store.snapshot().calls).toEqual({});
+    expect(store.snapshot().cards).toEqual({});
+  });
+
   test('a reconnect token passes the resumption handle through and mints again', async () => {
     const created = await calls.create(ALICE, 'C1');
 
@@ -184,13 +194,15 @@ describe('post_to_channel', () => {
     await expect(calls.tool(ALICE, created.callId, { id: 'g4', name: 'post_to_channel', args: { text: 'x'.repeat(2001) } })).rejects.toMatchObject({ status: 400 });
   });
 
-  test('the 21st post within a minute is refused locally', async () => {
+  test('the 21st post within a minute is refused locally, across all of a person\'s calls', async () => {
     const created = await calls.create(ALICE, 'C1');
+    const second = await calls.create(ALICE, 'C2');
     for (let i = 0; i < 20; i++) {
       await calls.tool(ALICE, created.callId, { id: `p${i}`, name: 'post_to_channel', args: { text: `msg ${i}` } });
     }
 
-    await expect(calls.tool(ALICE, created.callId, { id: 'p20', name: 'post_to_channel', args: { text: 'one too many' } })).rejects.toMatchObject({ status: 429 });
+    await expect(calls.tool(ALICE, second.callId, { id: 'p20', name: 'post_to_channel', args: { text: 'one too many' } })).rejects.toMatchObject({ status: 429 });
+    await expect(calls.tool(BOB, (await calls.create(BOB, 'C1')).callId, { id: 'b', name: 'post_to_channel', args: { text: 'bob is fine' } })).resolves.toMatchObject({ ok: true });
   });
 
   test('a dead token signs the user out: 401 and the callback fires', async () => {

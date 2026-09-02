@@ -9,6 +9,16 @@ export interface SlackDeps {
 }
 
 const DEFAULT_API_URL = 'https://slack.com/api';
+/** Slack answers in well under a second; a stalled connection must not hold a tool call open. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+async function parse<T>(response: Response, method: string): Promise<{ ok: boolean; error?: string } & T> {
+  try {
+    return (await response.json()) as { ok: boolean; error?: string } & T;
+  } catch {
+    throw new SlackError(method, `http_${response.status}_not_json`);
+  }
+}
 
 /** A Slack `ok: false` answer, with the error code Slack gave. */
 export class SlackError extends Error {
@@ -35,12 +45,13 @@ async function call<T>(deps: SlackDeps, method: string, token: string | null, pa
     method: 'POST',
     headers,
     body: JSON.stringify(params),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (response.status === 429) {
     const retry = Number(response.headers.get('retry-after') ?? '1');
     throw new SlackError(method, 'ratelimited', Number.isFinite(retry) ? retry : 1);
   }
-  const data = (await response.json()) as { ok: boolean; error?: string } & T;
+  const data = await parse<T>(response, method);
   if (!data.ok) throw new SlackError(method, data.error ?? `http_${response.status}`);
   return data;
 }
@@ -51,8 +62,9 @@ async function formCall<T>(deps: SlackDeps, method: string, params: Record<strin
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  const data = (await response.json()) as { ok: boolean; error?: string } & T;
+  const data = await parse<T>(response, method);
   if (!data.ok) throw new SlackError(method, data.error ?? `http_${response.status}`);
   return data;
 }

@@ -139,7 +139,9 @@ export async function createStore(path: string): Promise<Store> {
   try {
     const stat = await lstat(path);
     if (stat.isSymbolicLink()) throw new Error(`voice-desk store must not be a symlink: ${path}`);
-    state = { ...emptyState(), ...(JSON.parse(await readFile(path, 'utf8')) as Partial<StoreState>) };
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<Record<keyof StoreState, unknown>>;
+    const section = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, never>) : {});
+    state = { users: section(parsed.users), calls: section(parsed.calls), cards: section(parsed.cards) };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }

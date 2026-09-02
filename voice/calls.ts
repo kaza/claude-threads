@@ -60,7 +60,6 @@ interface Mailbox {
   startTs: string;
   /** Gemini call ids already answered, with their results (idempotent re-delivery). */
   results: Map<string, ToolResult>;
-  postTimes: number[];
 }
 
 interface ChannelPoller {
@@ -84,6 +83,8 @@ function randomId(): string {
 export class Calls {
   private readonly mailboxes = new Map<string, Mailbox>();
   private readonly pollers = new Map<string, ChannelPoller>();
+  /** post_to_channel timestamps per user: the budget is per person, across their calls. */
+  private readonly postTimes = new Map<string, number[]>();
   /** Workspace-wide: no Slack polling before this time (429 Retry-After). */
   private cooldownUntil = 0;
   private reaper?: ReturnType<typeof setInterval>;
@@ -102,14 +103,15 @@ export class Calls {
   async create(user: StoredUser, channel: string): Promise<{ callId: string; token: string; setup: unknown }> {
     const callId = randomId();
     const now = this.deps.now();
+    // Mint first: a Gemini failure then leaves no card, no stored call, no poller.
+    const minted = await this.mint(callId);
     await this.joinCard(user, channel);
     await this.deps.store.update((s) => {
       s.calls[callId] = { callId, userId: user.userId, channel, createdAt: now, lastActivityAt: now };
     });
-    this.mailboxes.set(callId, { replies: [], waiters: [], startTs: slackTs(now), results: new Map(), postTimes: [] });
+    this.mailboxes.set(callId, { replies: [], waiters: [], startTs: slackTs(now), results: new Map() });
     this.ensurePoller(channel);
     this.deps.log(`call=${callId} user=${user.userId} channel=${channel} start`);
-    const minted = await this.mint(callId);
     return { callId, ...minted };
   }
 
@@ -223,9 +225,10 @@ export class Calls {
     if (!text) throw new HttpError(400, 'post_to_channel needs text');
     if (text.length > 2000) throw new HttpError(400, 'post_to_channel text over 2000 characters');
     const now = this.deps.now();
-    mailbox.postTimes = mailbox.postTimes.filter((t) => t > now - 60_000);
-    if (mailbox.postTimes.length >= this.postsPerMinute) throw new HttpError(429, 'too many posts this minute');
-    mailbox.postTimes.push(now);
+    const recent = (this.postTimes.get(user.userId) ?? []).filter((t) => t > now - 60_000);
+    if (recent.length >= this.postsPerMinute) throw new HttpError(429, 'too many posts this minute');
+    recent.push(now);
+    this.postTimes.set(user.userId, recent);
     try {
       const posted = await postMessage(this.deps.slack, user.token, call.channel, `<@${this.deps.botUserId}> ${text}`);
       this.deps.log(`call=${call.callId} slack chat.postMessage ok ts=${posted.ts}`);

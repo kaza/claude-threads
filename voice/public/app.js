@@ -68,8 +68,18 @@ async function startCall() {
   status('starting…');
   const created = await api('calls', { channel });
   call = { callId: created.callId, setup: created.setup, ws: null, audio: null, handle: null, reconnecting: false, ended: false, tries: 0 };
-  await openMicrophone();
-  await connect(created.token);
+  try {
+    await openMicrophone();
+    await connect(created.token);
+  } catch (err) {
+    // Nothing half-open: release the microphone, drop the server-side call, then report.
+    const failed = call;
+    call = null;
+    try { failed.ws?.close(); } catch { /* not open */ }
+    await closeMicrophone(failed);
+    await api(`calls/${failed.callId}/end`, {}).catch(() => undefined);
+    throw err;
+  }
   el.hangup.hidden = false;
   say('note', `Connected to #${el.channel.options[el.channel.selectedIndex].textContent}. Speak.`);
 }

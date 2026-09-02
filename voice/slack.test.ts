@@ -40,8 +40,23 @@ describe('Slack errors', () => {
   test('ok:false becomes a SlackError carrying the code', async () => {
     const { fn } = fakeSlack({ 'chat.postMessage': [{ body: { ok: false, error: 'not_in_channel' } }] });
 
-    await expect(postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi')).rejects.toThrow(SlackError);
-    await expect(postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi')).rejects.toThrow('no scripted answer');
+    const attempt = postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi');
+
+    await expect(attempt).rejects.toMatchObject({ code: 'not_in_channel' });
+  });
+
+  test('a non-JSON answer (an HTML error page) is a SlackError with the status, not a parse crash', async () => {
+    const fn = (async () => new Response('<html>502</html>', { status: 502, headers: { 'content-type': 'text/html' } })) as unknown as typeof fetch;
+
+    await expect(postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi')).rejects.toMatchObject({ code: 'http_502_not_json' });
+  });
+
+  test('every request carries a timeout signal', async () => {
+    const { fn, calls } = fakeSlack({ 'chat.postMessage': [{ body: { ok: true, ts: '1' } }] });
+
+    await postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi');
+
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
   });
 
   test('a 429 becomes a ratelimited error with Retry-After, without retrying', async () => {

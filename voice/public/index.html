@@ -22,12 +22,12 @@
       <div class="row">
         <button id="talk" class="button">Talk</button>
         <button id="hangup" class="button danger" hidden>Hang up</button>
-        <span id="status" class="status">idle</span>
+        <span id="status" class="status" role="status" aria-live="polite">idle</span>
       </div>
       <ol id="transcript" class="transcript" aria-live="polite"></ol>
     </section>
 
-    <p id="error" class="error" hidden></p>
+    <p id="error" class="error" role="alert" aria-live="assertive" hidden></p>
   </main>
   <script type="module" src="static/app.js"></script>
 </body>
