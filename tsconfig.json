@@ -13,6 +13,6 @@
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/**/*", "tests/**/*"],
+  "include": ["src/**/*", "tests/**/*", "voice/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
