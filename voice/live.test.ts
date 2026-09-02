@@ -11,6 +11,7 @@ import {
   classify,
   downsample,
   floatTo16BitPCM,
+  frameText,
   int16ToBase64,
   pcm16ToFloat,
   rateOf,
@@ -86,6 +87,14 @@ describe('client messages', () => {
     expect(audioChunkMessage('QUJD')).toEqual({ realtimeInput: { audio: { data: 'QUJD', mimeType: 'audio/pcm;rate=16000' } } });
     expect(audioStreamEndMessage()).toEqual({ realtimeInput: { audioStreamEnd: true } });
     expect(textTurnMessage('hi')).toEqual({ clientContent: { turns: [{ role: 'user', parts: [{ text: 'hi' }] }], turnComplete: true } });
+  });
+});
+
+describe('frameText', () => {
+  test('reads a string, a Blob and a raw buffer alike', async () => {
+    expect(await frameText('{"a":1}')).toBe('{"a":1}');
+    expect(await frameText(new Blob(['{"b":2}']))).toBe('{"b":2}');
+    expect(await frameText(new TextEncoder().encode('{"c":3}').buffer)).toBe('{"c":3}');
   });
 });
 

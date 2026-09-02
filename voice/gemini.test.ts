@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { mintEphemeralToken } from './gemini.js';
-import { FRONT_DESK_INSTRUCTION, TOOL_DECLARATIONS, TOOL_NAMES, buildConstraints } from './prompt.js';
+import { FRONT_DESK_INSTRUCTION, TOOL_DECLARATIONS, TOOL_NAMES, buildSetup } from './prompt.js';
 
 function fakeFetch(status: number, body: unknown) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -26,20 +26,23 @@ describe('mintEphemeralToken', () => {
     expect(body.uses).toBe(1);
     expect(body.newSessionExpireTime).toBe('2026-09-02T10:02:00.000Z');
     expect(body.expireTime).toBe('2026-09-02T10:30:00.000Z');
-    expect(body.liveConnectConstraints.model).toBe('models/gemini-live-2.5-flash-preview');
-    const config = body.liveConnectConstraints.config;
-    expect(config.responseModalities).toEqual(['AUDIO']);
-    expect(config.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe('Aoede');
-    expect(config.systemInstruction.parts[0].text).toBe(FRONT_DESK_INSTRUCTION);
-    expect(config.tools[0].functionDeclarations.map((d: { name: string }) => d.name)).toEqual([...TOOL_NAMES]);
-    expect(config.sessionResumption).toEqual({});
-    expect(config.contextWindowCompression).toEqual({ slidingWindow: {} });
+    const setup = body.bidiGenerateContentSetup;
+    expect(body.liveConnectConstraints).toBeUndefined(); // the documented name the live API rejects
+    expect(setup.model).toBe('models/gemini-live-2.5-flash-preview');
+    expect(setup.generationConfig.responseModalities).toEqual(['AUDIO']);
+    expect(setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe('Aoede');
+    expect(setup.systemInstruction.parts[0].text).toBe(FRONT_DESK_INSTRUCTION);
+    expect(setup.tools[0].functionDeclarations.map((d: { name: string }) => d.name)).toEqual([...TOOL_NAMES]);
+    expect(setup.sessionResumption).toEqual({});
+    expect(setup.contextWindowCompression).toEqual({ slidingWindow: {} });
+    expect(setup.inputAudioTranscription).toEqual({});
+    expect(setup.outputAudioTranscription).toEqual({});
   });
 
   test('passes a resumption handle through on reconnect', () => {
-    const constraints = buildConstraints({ model: 'm', voiceName: 'Aoede', resumeHandle: 'h-1' });
+    const setup = buildSetup({ model: 'm', voiceName: 'Aoede', resumeHandle: 'h-1' });
 
-    expect(constraints.config.sessionResumption).toEqual({ handle: 'h-1' });
+    expect(setup.sessionResumption).toEqual({ handle: 'h-1' });
   });
 
   test('a non-2xx answer is an error with the status and body excerpt', async () => {

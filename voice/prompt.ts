@@ -53,22 +53,23 @@ export interface ConstraintOptions {
 }
 
 /**
- * The `liveConnectConstraints` block of an auth_tokens request: the model and
- * the full Live `setup` config the browser must use. Anything the browser
- * sends that differs is rejected by Google.
+ * The Live `BidiGenerateContentSetup` the front desk runs with. It is sent
+ * to Google twice: as `bidiGenerateContentSetup` of the auth_tokens request
+ * (locking it into the token) and, verbatim, as the browser's first `setup`
+ * message. Shape per the v1beta discovery document, 2026-09-02.
  */
-export function buildConstraints(opts: ConstraintOptions) {
+export function buildSetup(opts: ConstraintOptions) {
   return {
     model: `models/${opts.model}`,
-    config: {
+    generationConfig: {
       responseModalities: ['AUDIO'],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: opts.voiceName } } },
-      systemInstruction: { parts: [{ text: FRONT_DESK_INSTRUCTION }] },
-      tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-      sessionResumption: opts.resumeHandle ? { handle: opts.resumeHandle } : {},
-      contextWindowCompression: { slidingWindow: {} },
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
     },
+    systemInstruction: { parts: [{ text: FRONT_DESK_INSTRUCTION }] },
+    tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+    sessionResumption: opts.resumeHandle ? { handle: opts.resumeHandle } : {},
+    contextWindowCompression: { slidingWindow: {} },
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
   };
 }

@@ -33,3 +33,4 @@ export function downsample(float32: Float32Array, fromRate: number, toRate: numb
 export function int16ToBase64(int16: Int16Array): string;
 export function base64ToInt16(base64: string): Int16Array;
 export function rateOf(mimeType: string | undefined): number;
+export function frameText(data: unknown): Promise<string>;

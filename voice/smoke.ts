@@ -11,8 +11,8 @@
  */
 
 import { DEFAULT_LIVE_MODEL, LIVE_WS_URL, mintEphemeralToken } from './gemini.js';
-import { buildConstraints } from './prompt.js';
-import { classify, setupMessage, textTurnMessage, toolResponse } from './public/live.js';
+import { buildSetup } from './prompt.js';
+import { classify, frameText, setupMessage, textTurnMessage, toolResponse } from './public/live.js';
 
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
@@ -36,8 +36,7 @@ const token = await mintEphemeralToken({ apiKey, fetch, now: () => new Date() },
 console.log(`ok  token minted, expires ${token.expireTime}`);
 
 // 3. The constrained socket accepts the locked setup.
-const constraints = buildConstraints({ model, voiceName: 'Aoede' });
-const setup = { model: constraints.model, ...constraints.config };
+const setup = buildSetup({ model, voiceName: 'Aoede' });
 const ws = new WebSocket(`${LIVE_WS_URL}?access_token=${encodeURIComponent(token.name)}`);
 const timeout = setTimeout(() => fail('timeout', 'no answer within 30 s'), 30_000);
 let sawSetup = false;
@@ -50,7 +49,7 @@ ws.addEventListener('close', (e) => {
   if (!(sawSetup && sawToolCall && sawAudio)) fail('close', `code=${e.code} reason=${e.reason} setup=${sawSetup} toolCall=${sawToolCall} audio=${sawAudio}`);
 });
 ws.addEventListener('message', async (event) => {
-  const data = typeof event.data === 'string' ? event.data : await (event.data as Blob).text();
+  const data = await frameText(event.data);
   for (const ev of classify(JSON.parse(data))) {
     if (ev.type === 'setupComplete') {
       sawSetup = true;

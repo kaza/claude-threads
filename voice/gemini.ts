@@ -1,9 +1,11 @@
 /**
  * voice-desk: minting one-use ephemeral tokens for the Gemini Live API.
- * Reference: https://ai.google.dev/gemini-api/docs/ephemeral-tokens
+ * Reference: https://ai.google.dev/gemini-api/docs/ephemeral-tokens — but the
+ * field names come from the v1beta discovery document: the docs' `liveConnectConstraints`
+ * is rejected by the live API (2026-09-02); the real field is `bidiGenerateContentSetup`.
  */
 
-import { buildConstraints, type ConstraintOptions } from './prompt.js';
+import { buildSetup, type ConstraintOptions } from './prompt.js';
 
 /** The AI Studio id of the 2.5 native-audio model — the one with NON_BLOCKING tools (verified live before use). */
 export const DEFAULT_LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
@@ -37,7 +39,7 @@ export async function mintEphemeralToken(deps: GeminiDeps, opts: ConstraintOptio
     uses: 1,
     expireTime: new Date(now + TOKEN_LIFETIME_MS).toISOString(),
     newSessionExpireTime: new Date(now + NEW_SESSION_WINDOW_MS).toISOString(),
-    liveConnectConstraints: buildConstraints(opts),
+    bidiGenerateContentSetup: buildSetup(opts),
   };
   const response = await deps.fetch(`${(deps.apiUrl ?? DEFAULT_API_URL).replace(/\/+$/, '')}/auth_tokens`, {
     method: 'POST',
