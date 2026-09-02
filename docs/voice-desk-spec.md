@@ -202,6 +202,7 @@ back.
 | Var | What |
 |---|---|
 | `GEMINI_API_KEY` | ⚠️ **none exists in VVS today** — Almir provides one (Google AI Studio key on a VVS Google account; set a budget alert). Not the Gemini CLI's OAuth login |
+| `WAIT_DEADLINE_MS` | how long `wait_for_reply` may hold before answering `waiting`; default 25 000. Set ~3 000 for a model that blocks on tools (3.1 Flash Live) so it regains its voice quickly |
 | `GEMINI_LIVE_MODEL` | default `gemini-2.5-flash-native-audio-preview-12-2025`. The 2.5 native-audio model carries different ids on AI Studio and Vertex; verified against `GET /v1beta/models` with the key at install, and it must be one that supports `NON_BLOCKING` tools |
 | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | from the Claude Code app's *Basic Information* |
 | `SLACK_TEAM_ID` | `T0BFTMW5H0W` |
@@ -323,6 +324,24 @@ Tests (`bun test voice/`), each with fake `fetch` and a fake clock injected thro
 | — | code review (Codex, 16): reply filter dropped bot messages carrying `bot_id`; reconnect sent the old setup; audio before `setupComplete`; racy id dedupe; logout left the mic and the calls; nonce not one-use; cookies not revocable; card races and participant counting; boot dropped failed cards; goodbye cut at 4 s; bot membership unchecked; history page forgot candidates; malformed bindings tolerated; Slack calls unlogged | Codex | **fixed**, each with a test where the behaviour is server-side |
 | — | code review: the ten-minute poll cursor contradicts "re-deliver on later edit" | Codex | **partly accepted**: the cursor now moves only past posts that were delivered, unchanged since, and quiet; an edit to a post idle for more than ten minutes is not re-read. Re-fetching the whole channel forever is the worse trade |
 | — | code review: no browser WebSocket/AudioContext test harness | Codex | **deferred**: the pure helpers are tested; the socket and audio path are covered by the gated live smoke and the first real calls. Written down so it is a known gap, not a forgotten one |
+
+## Measured on the live API (2026-09-02, `SMOKE_HOLD_TOOL_MS=6000 bun voice/smoke.ts <model>`)
+
+| Model | Tool answer held 6 s | Verdict |
+|---|---|---|
+| `gemini-2.5-flash-native-audio-preview-12-2025` | kept talking ("Posted. Waiting for Claude."), 16 audio chunks, already issued `wait_for_reply` | ✅ async; **default**. One run in four closed with Google's `1007 CONTENT_TYPE_AUDIO not supported` while it spoke during the hold — intermittent, the page's reconnect covers it, watch for it |
+| `gemini-3.1-flash-live-preview` | silent for the whole hold, then answered | ⚠️ blocking, as its docs say. Better voice; usable only with `WAIT_DEADLINE_MS≈3000` so it regains control often, at the cost of stilted "still waiting" turns |
+| `gemini-3.5-*` | transcribe-live and live-translate only | not conversation models |
+
+Corroboration from VVS's other Live client (vending-id-austria, "Jarvis", 2026-05):
+2.5 native-audio threw a server-side `1011 Internal error` mid-session there and
+they moved to 3.1 Flash Live, which "runs clean"; 3.1 streams a
+`sessionResumptionUpdate` handle about once a second (our client keeps only
+resumable ones); and Gemini can deliver `toolCall` in the same frame as
+`serverContent` (our `classify` emits both). Their use case has no
+long-running tool, so blocking never cost them anything; ours is nothing but
+a long-running tool, which is why the async model stays the default here and
+the switch to 3.1 is one env line plus `WAIT_DEADLINE_MS`.
 
 ## Decisions
 
