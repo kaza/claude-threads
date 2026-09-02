@@ -190,12 +190,19 @@ lives until `expireTime` (30 min).
 
 One card per channel while at least one call is live: `calls.add` (user scope
 `calls:write`, `external_unique_id = <channel>-<epoch>`) plus a `call` block
-posted by the first participant; later participants are added with
+that **rides on the first relayed post** of the channel (a section with the
+text, then the call block); later participants are added with
 `calls.participants.add`, removed on `end`, and the card is ended when the
 last leg leaves. Cards are persisted; on boot voice-desk **ends every card
 still recorded**, and a reaper ends calls idle for 30 minutes (browser unload
-is not reliable). A partial failure (card created, post failed) rolls the card
-back.
+is not reliable). If the first post fails, the card stays unposted and rides
+on the next one; a call in which nobody speaks shows no card.
+
+Why not a card message of its own (round 1 did that): claude-threads treats
+every post made through the app's user token as the person's prompt
+(`pr/app-user-posts`), so a standalone "Voice call with the agent" post cost
+a session turn and its answer was read aloud as if it were the reply
+(2026-09-02 09:55, second live call).
 
 ## Config (service env, `~/.config/voice-desk/env`, 0600)
 

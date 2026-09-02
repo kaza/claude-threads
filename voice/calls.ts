@@ -19,7 +19,6 @@ import {
   callsEnd,
   history,
   isTokenDead,
-  postCallBlock,
   postMessage,
   type SlackDeps,
 } from './slack.js';
@@ -265,8 +264,16 @@ export class Calls {
     recent.push(now);
     this.postTimes.set(user.userId, recent);
     try {
-      const posted = await postMessage(this.deps.slack, user.token, call.channel, `<@${this.deps.botUserId}> ${text}`);
-      this.deps.log(`call=${call.callId} slack chat.postMessage ok ts=${posted.ts}`);
+      const card = this.deps.store.snapshot().cards[call.channel];
+      const cardToShow = card && !card.posted ? card.slackCallId : undefined;
+      const posted = await postMessage(this.deps.slack, user.token, call.channel, `<@${this.deps.botUserId}> ${text}`, cardToShow);
+      if (cardToShow) {
+        await this.deps.store.update((s) => {
+          const current = s.cards[call.channel];
+          if (current && current.slackCallId === cardToShow) current.posted = true;
+        });
+      }
+      this.deps.log(`call=${call.callId} slack chat.postMessage ok ts=${posted.ts}${cardToShow ? ' +card' : ''}`);
       return { ok: true, result: { posted: true }, scheduling: 'SILENT' };
     } catch (err) {
       return this.slackFailure(user, err, 'chat.postMessage', call.callId);
@@ -418,14 +425,10 @@ export class Calls {
       title: 'Voice call with the agent',
       userId: user.userId,
     });
-    try {
-      await postCallBlock(this.deps.slack, user.token, channel, created.id);
-    } catch (err) {
-      await callsEnd(this.deps.slack, user.token, created.id).catch(() => undefined);
-      throw err;
-    }
+    // The card block is not posted here: it rides on the first relayed post
+    // (see postMessage), so the daemon never sees a card-only message.
     await this.deps.store.update((s) => {
-      s.cards[channel] = { channel, slackCallId: created.id, userId: user.userId, createdAt: this.deps.now() };
+      s.cards[channel] = { channel, slackCallId: created.id, userId: user.userId, createdAt: this.deps.now(), posted: false };
     });
   }
 

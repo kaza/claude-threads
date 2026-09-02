@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { SlackError, callsAdd, isTokenDead, listChannels, oauthAccess, postMessage, history, userName, postCallBlock } from './slack.js';
+import { SlackError, callsAdd, isTokenDead, listChannels, oauthAccess, postMessage, history, userName } from './slack.js';
 
 type Recorded = { url: string; init: RequestInit };
 
@@ -52,11 +52,15 @@ describe('argument encoding', () => {
   test('nested arguments (blocks) travel as JSON strings inside the form', async () => {
     const { fn, calls } = fakeSlack({ 'chat.postMessage': [{ body: { ok: true, ts: '1' } }] });
 
-    await postCallBlock({ fetch: fn }, 'xoxp', 'C1', 'R1');
+    await postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi', 'R1');
 
     const body = new URLSearchParams(calls[0].init.body as string);
     expect(body.get('channel')).toBe('C1');
-    expect(JSON.parse(body.get('blocks') as string)).toEqual([{ type: 'call', call_id: 'R1' }]);
+    expect(body.get('text')).toBe('hi');
+    expect(JSON.parse(body.get('blocks') as string)).toEqual([
+      { type: 'section', text: { type: 'mrkdwn', text: 'hi' } },
+      { type: 'call', call_id: 'R1' },
+    ]);
   });
 });
 
@@ -81,6 +85,7 @@ describe('Slack errors', () => {
     await postMessage({ fetch: fn }, 'xoxp', 'C1', 'hi');
 
     expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
+    expect(new URLSearchParams(calls[0].init.body as string).has('blocks')).toBe(false);
   });
 
   test('a 429 becomes a ratelimited error with Retry-After, without retrying', async () => {

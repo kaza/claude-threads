@@ -102,7 +102,7 @@ afterEach(async () => {
 });
 
 describe('creating a call', () => {
-  test('mints a locked token, records the call for its owner, and posts the call card once', async () => {
+  test('mints a locked token, records the call for its owner, and registers the call card without posting it', async () => {
     const created = await calls.create(ALICE, 'C1');
 
     expect(created.token).toBe('auth_tokens/tok');
@@ -113,8 +113,9 @@ describe('creating a call', () => {
     expect(stored.channel).toBe('C1');
     expect(apis.calls('calls.add')).toHaveLength(1);
     expect(apis.calls('calls.add')[0].body.join_url).toBe('https://agents.vvs-capital.com/voice/?channel=C1');
-    const block = apis.calls('chat.postMessage').find((c) => Array.isArray(c.body.blocks));
-    expect(block?.body.blocks).toEqual([{ type: 'call', call_id: 'R1' }]);
+    // No message yet: a card-only post would be a prompt to the daemon.
+    expect(apis.calls('chat.postMessage')).toHaveLength(0);
+    expect(store.snapshot().cards.C1).toMatchObject({ slackCallId: 'R1', posted: false });
     expect(JSON.stringify(created)).not.toContain('"g"');
   });
 
@@ -147,14 +148,16 @@ describe('creating a call', () => {
     expect(apis.calls('calls.participants.add')[0].auth).toBe('Bearer xoxp-bob');
   });
 
-  test('when posting the card block fails, the Slack call is ended again and nothing is stored', async () => {
+  test('when the first relayed post fails, the card stays unposted and rides on the next one', async () => {
+    const created = await calls.create(ALICE, 'C1');
     apis.script('chat.postMessage', [{ body: { ok: false, error: 'not_in_channel' } }]);
 
-    await expect(calls.create(ALICE, 'C1')).rejects.toThrow('not_in_channel');
+    const failed = await calls.tool(ALICE, created.callId, { id: 'g1', name: 'post_to_channel', args: { text: 'first' } });
+    await calls.tool(ALICE, created.callId, { id: 'g2', name: 'post_to_channel', args: { text: 'second' } });
 
-    expect(apis.calls('calls.end')).toHaveLength(1);
-    expect(store.snapshot().cards).toEqual({});
-    expect(store.snapshot().calls).toEqual({});
+    expect(failed.ok).toBe(false);
+    expect(store.snapshot().cards.C1).toMatchObject({ posted: true });
+    expect(apis.calls('chat.postMessage')[1].body.blocks).toContainEqual({ type: 'call', call_id: 'R1' });
   });
 
   test('a Gemini failure while minting leaves no card, no call and no Slack side effect', async () => {
@@ -192,10 +195,25 @@ describe('post_to_channel', () => {
     const result = await calls.tool(ALICE, created.callId, { id: 'g1', name: 'post_to_channel', args: { text: 'rerun the backfill', channel: 'C-EVIL' } });
 
     expect(result).toEqual({ ok: true, result: { posted: true }, scheduling: 'SILENT' });
-    const post = apis.calls('chat.postMessage').find((c) => !Array.isArray(c.body.blocks));
+    const post = apis.calls('chat.postMessage')[0];
     expect(post?.auth).toBe('Bearer xoxp-alice');
     expect(post?.body.channel).toBe('C1');
     expect(post?.body.text).toBe('<@UBOT> rerun the backfill');
+  });
+
+  test('the call card rides on the first relayed post only', async () => {
+    const created = await calls.create(ALICE, 'C1');
+
+    await calls.tool(ALICE, created.callId, { id: 'g1', name: 'post_to_channel', args: { text: 'first' } });
+    await calls.tool(ALICE, created.callId, { id: 'g2', name: 'post_to_channel', args: { text: 'second' } });
+
+    const [first, second] = apis.calls('chat.postMessage');
+    expect(first.body.blocks).toEqual([
+      { type: 'section', text: { type: 'mrkdwn', text: '<@UBOT> first' } },
+      { type: 'call', call_id: 'R1' },
+    ]);
+    expect(second.body.blocks).toBeUndefined();
+    expect(store.snapshot().cards.C1).toMatchObject({ posted: true });
   });
 
   test('the same Gemini call id twice posts once and returns the first result', async () => {
@@ -204,7 +222,7 @@ describe('post_to_channel', () => {
     await calls.tool(ALICE, created.callId, { id: 'g1', name: 'post_to_channel', args: { text: 'once' } });
     await calls.tool(ALICE, created.callId, { id: 'g1', name: 'post_to_channel', args: { text: 'once' } });
 
-    expect(apis.calls('chat.postMessage').filter((c) => !Array.isArray(c.body.blocks))).toHaveLength(1);
+    expect(apis.calls('chat.postMessage')).toHaveLength(1);
   });
 
   test('a Slack failure is returned to the model as an interrupting error, without retrying', async () => {
@@ -244,7 +262,7 @@ describe('post_to_channel', () => {
     ]);
 
     expect(a).toEqual(b);
-    expect(apis.calls('chat.postMessage').filter((c) => !Array.isArray(c.body.blocks))).toHaveLength(1);
+    expect(apis.calls('chat.postMessage')).toHaveLength(1);
   });
 
   test('a dead token signs the user out: 401 and the callback fires', async () => {

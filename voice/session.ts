@@ -112,6 +112,8 @@ export interface StoredCard {
   /** The user whose token created it; also used to end it. */
   userId: string;
   createdAt: number;
+  /** The card block has ridden on a relayed post; it rides on the first one only. */
+  posted: boolean;
 }
 
 export interface StoreState {

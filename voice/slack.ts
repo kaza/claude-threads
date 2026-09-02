@@ -167,8 +167,17 @@ export async function channelMembers(deps: SlackDeps, token: string, channel: st
   return out;
 }
 
-export async function postMessage(deps: SlackDeps, token: string, channel: string, text: string): Promise<{ ts: string }> {
-  const data = await call<{ ts?: string }>(deps, 'chat.postMessage', token, { channel, text });
+/**
+ * Posts as the person. With `slackCallId` the call card rides on the message
+ * instead of being a message of its own: claude-threads treats every post made
+ * through the app's user token as the person's prompt, so a standalone card
+ * post would be answered ("Voice call with the agent" → a session turn).
+ */
+export async function postMessage(deps: SlackDeps, token: string, channel: string, text: string, slackCallId?: string): Promise<{ ts: string }> {
+  const blocks = slackCallId
+    ? [{ type: 'section', text: { type: 'mrkdwn', text } }, { type: 'call', call_id: slackCallId }]
+    : undefined;
+  const data = await call<{ ts?: string }>(deps, 'chat.postMessage', token, { channel, text, blocks });
   return { ts: data.ts ?? '' };
 }
 
@@ -201,15 +210,6 @@ export async function callsAdd(
   });
   if (!data.call?.id) throw new SlackError('calls.add', 'missing_call_id');
   return { id: data.call.id };
-}
-
-export async function postCallBlock(deps: SlackDeps, token: string, channel: string, slackCallId: string): Promise<{ ts: string }> {
-  const data = await call<{ ts?: string }>(deps, 'chat.postMessage', token, {
-    channel,
-    text: 'Voice call with the agent',
-    blocks: [{ type: 'call', call_id: slackCallId }],
-  });
-  return { ts: data.ts ?? '' };
 }
 
 export async function callParticipantsAdd(deps: SlackDeps, token: string, slackCallId: string, userId: string): Promise<void> {
