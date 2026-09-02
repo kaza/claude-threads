@@ -1273,6 +1273,17 @@ export class SessionManager extends EventEmitter {
     await lifecycle.resumePausedSession(threadId, message, files, this.getContext(), username, platformId);
   }
 
+  /**
+   * The configured Claude account pool; empty in single-account mode. Exposed
+   * so `!usage` reports the same seats the router is choosing between.
+   */
+  getClaudeAccounts(): readonly ClaudeAccount[] {
+    // The pool's own normalized list, not the raw constructor input: the two
+    // must enumerate identically or `!usage` reports seats the router does not
+    // use. Readonly so a caller cannot mutate what the router is reading.
+    return this.accountPool.all;
+  }
+
   getPersistedSession(threadId: string, platformId?: string): PersistedSession | undefined {
     return this.registry.getPersistedByThreadId(threadId, platformId);
   }
