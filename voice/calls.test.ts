@@ -17,6 +17,16 @@ const BOB: StoredUser = { userId: 'U2', name: 'Bob', token: 'xoxp-bob' };
 
 type Recorded = { method: string; auth: string | undefined; body: Record<string, unknown> };
 
+/** Slack calls are form-encoded (nested values as JSON strings), Gemini calls are JSON. */
+function decodeBody(init?: RequestInit): Record<string, unknown> {
+  if (!init?.body) return {};
+  const contentType = ((init.headers ?? {}) as Record<string, string>)['Content-Type'] ?? '';
+  if (!contentType.includes('x-www-form-urlencoded')) return JSON.parse(init.body as string);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of new URLSearchParams(init.body as string)) out[key] = /^[[{]/.test(value) ? JSON.parse(value) : value;
+  return out;
+}
+
 /** Fake Slack + Gemini behind one fetch. Answers come from per-method queues, else sensible defaults. */
 function fakeApis() {
   const recorded: Recorded[] = [];
@@ -26,7 +36,7 @@ function fakeApis() {
     const u = String(url);
     const method = u.split('/').pop() as string;
     const headers = (init?.headers ?? {}) as Record<string, string>;
-    const body = init?.body ? JSON.parse(init.body as string) : {};
+    const body = decodeBody(init);
     recorded.push({ method, auth: headers.Authorization, body });
     const scripted = queues[method]?.shift();
     if (scripted) {

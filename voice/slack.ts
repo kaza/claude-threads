@@ -40,8 +40,23 @@ export function isTokenDead(err: unknown): boolean {
   return err instanceof SlackError && TOKEN_DEAD_ERRORS.has(err.code);
 }
 
+/**
+ * Form-encodes the arguments. Slack's read methods (users.info, conversations.*)
+ * accept only form or query arguments and silently ignore a JSON body, which
+ * showed up live as users.info → user_not_found (2026-09-02). Every method
+ * accepts a form, with nested values (blocks, users) as JSON strings.
+ */
+function encodeForm(params: Record<string, unknown>): string {
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    form.set(key, typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value));
+  }
+  return form.toString();
+}
+
 async function call<T>(deps: SlackDeps, method: string, token: string | null, params: Record<string, unknown>): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json; charset=utf-8' };
+  const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const started = Date.now();
   const done = (outcome: string) => deps.log?.(`slack ${method} ${outcome} ${Date.now() - started}ms`);
@@ -50,7 +65,7 @@ async function call<T>(deps: SlackDeps, method: string, token: string | null, pa
     response = await deps.fetch(`${(deps.apiUrl ?? DEFAULT_API_URL).replace(/\/+$/, '')}/${method}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(params),
+      body: encodeForm(params),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
