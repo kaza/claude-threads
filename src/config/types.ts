@@ -3,6 +3,7 @@
  */
 
 import type { AutoUpdateConfig, AutoRestartMode, ScheduledWindow } from '../auto-update/types.js';
+import type { SpeechConfig, TranscriptionConfig } from '../transcription/types.js';
 import type { DirectChannelModeConfig, ApprovalsMode } from '../platform/utils.js';
 
 // Re-export auto-update types for convenience
@@ -368,6 +369,17 @@ export interface Config {
   stickyMessage?: StickyMessageCustomization; // Optional sticky message customization
   /** Optional Claude account pool. When omitted, bot runs in single-account mode. */
   claudeAccounts?: ClaudeAccount[];
+  /**
+   * Optional speech-to-text for inbound audio attachments (voice notes).
+   * One provider per daemon, applied to every platform. Omitted = audio is
+   * saved and listed like any other file. See docs/audio-transcription-spec.md.
+   */
+  transcription?: TranscriptionConfig;
+  /**
+   * Optional voice replies: with this block the agent is told how to answer
+   * in audio (`say` script + `send_file`). See docs/voice-replies-spec.md.
+   */
+  speech?: SpeechConfig;
   platforms: PlatformInstanceConfig[];
 }
 

@@ -345,6 +345,18 @@ export interface SessionOperations {
   getPlatformMemoryConfig(platformId: string): ResolvedMemoryConfig;
 
   /**
+   * The chat-platform prompt appended to every Claude session, plus the
+   * voice-reply rules when `speech:` is configured (docs/voice-replies-spec.md).
+   */
+  appendSystemPrompt(): string;
+
+  /**
+   * Voice replies: the "always speak" reminder to prefix this session's user
+   * turns with, or '' when the switch is off or `speech:` is not configured.
+   */
+  alwaysSpeakReminder(session: Session): string;
+
+  /**
    * Whether scheduled routines are enabled for a platform (default true).
    */
   isRoutinesEnabled(platformId: string): boolean;

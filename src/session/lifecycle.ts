@@ -50,7 +50,9 @@ import {
   cleanupSessionUploads,
   getSessionUploadDir,
   postSkippedFilesFeedback,
+  postTranscriptFeedback,
 } from '../operations/streaming/handler.js';
+import { takeContextPromptFiles } from '../operations/context-prompt/handler.js';
 import { detectWorktreeInfo } from '../git/worktree.js';
 import { resolveSessionMemory, activeWorktreeRepoRoot } from '../memory/store.js';
 import { scheduleDistillation } from '../memory/distiller.js';
@@ -518,6 +520,7 @@ function createMessageManager(
     sessionId: session.sessionId,
     worktreePath: session.worktreeInfo?.worktreePath,
     worktreeBranch: session.worktreeInfo?.branch,
+    alwaysSpeakReminder: () => ctx.ops.alwaysSpeakReminder(session),
     registerPost: (postId, options) => {
       ctx.ops.registerPost(postId, session.threadId);
       postTracker.register(postId, session.threadId, session.sessionId, options);
@@ -667,17 +670,32 @@ function createMessageManager(
     // Inject metadata reminder periodically
     messageToSend = maybeInjectMetadataReminder(messageToSend, session, ctx, session);
 
-    // Build content with files (if any)
-    // Note: queuedFiles from MessageManager are simplified refs (id, name)
-    // For now, send without files - the full PlatformFile[] would need to be
-    // stored separately if file support is needed here
+    // Build content with the files that were queued behind the prompt. The
+    // event only carries simplified refs (id, name) from MessageManager; the
+    // original PlatformFile[] were parked in the context-prompt module when
+    // the prompt was posted. Before this, attachments on a mid-thread start
+    // survived only because the pre-built file header rode along in
+    // queuedPrompt — startSession now queues the raw prompt, so the files
+    // have to travel here explicitly.
+    const queuedFiles = takeContextPromptFiles(session);
     const uploadDir = getSessionUploadDir(session.platformId, session.threadId);
-    const { content } = await ctx.ops.buildMessageContent(messageToSend, session.platform, uploadDir, undefined);
 
-    // Send the message to Claude
-    if (session.claude.isRunning()) {
-      session.claude.sendMessage(content);
-      ctx.ops.startTyping(session);
+    // This listener runs on a plain EventEmitter: a rejection here is nobody's
+    // to await and would surface as an unhandled rejection after the prompt
+    // state and the parked files are already consumed. Report it in the
+    // thread instead — the failure stays visible, the daemon stays up.
+    try {
+      const { content, skipped, transcripts } = await ctx.ops.buildMessageContent(messageToSend, session.platform, uploadDir, queuedFiles);
+
+      // Send the message to Claude
+      if (session.claude.isRunning()) {
+        session.claude.sendMessage(content);
+        ctx.ops.startTyping(session);
+      }
+      await postSkippedFilesFeedback(session.platform, session.threadId, skipped);
+      await postTranscriptFeedback(session.platform, session.threadId, transcripts);
+    } catch (err) {
+      await logAndNotify(err, { action: 'Send queued message after context prompt', session });
     }
 
     // Update activity and persist
@@ -1028,7 +1046,7 @@ async function startSessionImpl(
     actualThreadId,
     username,
     [username],
-    CHAT_PLATFORM_PROMPT,
+    ctx.ops.appendSystemPrompt(),
     ctx.state.githubEmailsStore,
     memoryConfig.enabled && memoryConfig.channelLayer ? ctx.state.memoryStore : null,
     { userAttribution },
@@ -1079,6 +1097,7 @@ async function startSessionImpl(
     platformConfig: platformMcpConfig,
     appendSystemPrompt: systemPrompt,
     logSessionId: sessionId,  // Route logs to session panel
+    sessionKey: sessionId,    // Voice replies: identity for the `say` switch
     permissionTimeoutMs: ctx.config.permissionTimeoutMs,
     account: claudeAccount
       ? { id: claudeAccount.id, home: claudeAccount.home, apiKey: claudeAccount.apiKey }
@@ -1245,11 +1264,6 @@ async function startSessionImpl(
     ctx.ops.registerWorktreeUser(session.worktreeInfo.worktreePath, session.sessionId);
   }
 
-  // Build message content
-  const uploadDir = getSessionUploadDir(session.platformId, session.threadId);
-  const { content, skipped } = await ctx.ops.buildMessageContent(options.prompt, session.platform, uploadDir, options.files);
-  const messageText = content;
-
   // Check if this is a mid-thread start (replyToPostId means we're replying in an existing thread)
   // Offer context prompt if there are previous messages in the thread.
   // Use triggeringPostId (the actual @mention message) to exclude from
@@ -1275,13 +1289,21 @@ async function startSessionImpl(
     // event the session must see — excluding the thread root here previously
     // fired "triage the incident" sessions that never saw the incident.
     const excludePostId = options.autoIncludeContext ? undefined : (triggeringPostId || replyToPostId);
-    await ctx.ops.offerContextPrompt(session, messageText, options.files, excludePostId, username, options.autoIncludeContext);
-    // Either path inside offerContextPrompt sends or queues. Surface any
-    // skipped-file warnings and return — the fallback claude.sendMessage()
-    // below would be a duplicate.
-    await postSkippedFilesFeedback(session.platform, actualThreadId, skipped);
+    // Hand over the RAW prompt and files: every send path inside
+    // offerContextPrompt builds the message content itself (sendWithContext →
+    // buildMessageContent) and posts its own skipped-file / transcript
+    // feedback. Building here as well used to download every attachment
+    // twice and prepend the file-list header twice — and would transcribe a
+    // voice note twice. Either path inside offerContextPrompt sends or
+    // queues, so return: the fallback claude.sendMessage() below would be a
+    // duplicate.
+    await ctx.ops.offerContextPrompt(session, options.prompt, options.files, excludePostId, username, options.autoIncludeContext);
     return;
   }
+
+  // Build message content (once — see the note above)
+  const uploadDir = getSessionUploadDir(session.platformId, session.threadId);
+  const { content, skipped, transcripts } = await ctx.ops.buildMessageContent(options.prompt, session.platform, uploadDir, options.files);
 
   // No replyToPostId — defensive path for callers that don't pass a thread
   // root. In practice handleMessage always supplies one (post.rootId ||
@@ -1291,8 +1313,9 @@ async function startSessionImpl(
   session.messageCount++;
   claude.sendMessage(formatUserTurn(content, username, shouldAttribute(session.userAttribution, session.sessionAllowedUsers.size)));
 
-  // Surface any skipped attachments to the user
+  // Surface any skipped attachments to the user, then echo voice-note transcripts
   await postSkippedFilesFeedback(session.platform, actualThreadId, skipped);
+  await postTranscriptFeedback(session.platform, actualThreadId, transcripts);
 
   // NOTE: We don't persist here. We wait for Claude to actually respond before persisting.
   // This prevents persisting sessions where Claude dies before saving its conversation,
@@ -1443,7 +1466,7 @@ async function resumeSessionImpl(
     state.threadId,
     state.startedBy,
     [...sessionAllowedUserSet(state)],
-    CHAT_PLATFORM_PROMPT,
+    ctx.ops.appendSystemPrompt(),
     ctx.state.githubEmailsStore,
     memoryConfig.enabled && memoryConfig.channelLayer ? ctx.state.memoryStore : null,
     { userAttribution },
@@ -1477,6 +1500,7 @@ async function resumeSessionImpl(
     platformConfig: platformMcpConfig,
     appendSystemPrompt,
     logSessionId: sessionId,  // Route logs to session panel
+    sessionKey: sessionId,    // Voice replies: identity for the `say` switch
     permissionTimeoutMs: ctx.config.permissionTimeoutMs,
     account: claudeAccount
       ? { id: claudeAccount.id, home: claudeAccount.home, apiKey: claudeAccount.apiKey }

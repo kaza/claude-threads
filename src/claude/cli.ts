@@ -12,6 +12,8 @@ import { OUTBOUND_ENV } from '../mcp/outbound-env.js';
 import { AGENT_FEATURES_ENV } from '../mcp/agent-features-env.js';
 import { detectRateLimit, cooldownDeadline, parseRateLimitEvent, type RateLimitHit } from './rate-limit-detector.js';
 import type { PermissionMode } from '../config/types.js';
+import { CONFIG_PATH } from '../config/index.js';
+import { CONFIG_PATH_ENV, SPEAK_DIR_ENV, SPEAK_KEY_ENV, speakKey, speakStateDir } from '../transcription/voice-prompt.js';
 
 const log = createLogger('claude');
 
@@ -117,6 +119,14 @@ export interface ClaudeCliOptions {
   platformConfig?: PlatformMcpConfig;  // Platform-specific config for MCP server
   appendSystemPrompt?: string;  // Additional system prompt to append
   logSessionId?: string;  // Session ID for log routing (platformId:threadId)
+  /**
+   * The session's composite id (`platformId:threadId`), exported to the
+   * child as `CLAUDE_THREADS_SPEAK_KEY` together with the daemon's marker
+   * dir and config path, so the `say` script files the "always speak"
+   * switch where the daemon looks for it — whatever `$HOME` the session
+   * runs under (docs/voice-replies-spec.md).
+   */
+  sessionKey?: string;
   permissionTimeoutMs?: number;  // Timeout for permission approval (default: 120000)
   /**
    * Username of the user who started this session. Forwarded to the MCP
@@ -204,9 +214,17 @@ export interface ClaudeCliAccount {
 export function buildClaudeChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   account?: ClaudeCliAccount,
-  opts?: { decisionBridge?: boolean; disableAutoMemory?: boolean }
+  opts?: { decisionBridge?: boolean; disableAutoMemory?: boolean; sessionKey?: string }
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...parentEnv };
+
+  // Voice replies: the session's identity and the daemon's paths, computed
+  // here with the daemon's own $HOME before any account override below.
+  if (opts?.sessionKey) {
+    env[SPEAK_KEY_ENV] = speakKey(opts.sessionKey);
+    env[SPEAK_DIR_ENV] = speakStateDir();
+    env[CONFIG_PATH_ENV] = CONFIG_PATH;
+  }
 
   // Always-on tuning flags (opt-out by setting them in the parent env).
   if (env.MCP_CONNECTION_NONBLOCKING === undefined) {
@@ -1088,6 +1106,7 @@ export class ClaudeCli extends EventEmitter {
     return buildClaudeChildEnv(process.env, this.options.account, {
       decisionBridge: this.options.decisionBridgePath !== undefined,
       disableAutoMemory: this.options.memory === null,
+      sessionKey: this.options.sessionKey,
     });
   }
 

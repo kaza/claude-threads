@@ -35,6 +35,8 @@ import { SessionMonitor } from '../operations/monitor/index.js';
 
 // Import extracted modules
 import * as streaming from '../operations/streaming/index.js';
+import type { SpeechConfig, Transcriber } from '../transcription/index.js';
+import { VOICE_REPLIES_PROMPT, alwaysSpeakReminder } from '../transcription/voice-prompt.js';
 import * as events from '../operations/events/index.js';
 import * as commands from '../operations/commands/index.js';
 import * as lifecycle from './lifecycle.js';
@@ -435,7 +437,7 @@ export class SessionManager extends EventEmitter {
       },
       startTyping: (s) => this.startTyping(s),
       stopTyping: (s) => this.stopTyping(s),
-      buildMessageContent: (t, p, uploadDir, f) => streaming.buildMessageContent(t, p, uploadDir, f, this.debug),
+      buildMessageContent: (t, p, uploadDir, f) => streaming.buildMessageContent(t, p, uploadDir, f, this.debug, this.transcriber),
 
       // Persistence
       persistSession: (s) => this.persistSession(s),
@@ -493,6 +495,8 @@ export class SessionManager extends EventEmitter {
       getPlatformMemoryConfig: (pid) => this.platformMemory.get(pid) ?? DEFAULT_MEMORY_CONFIG,
 
       isRoutinesEnabled: (pid) => this.platformRoutines.get(pid) ?? true,
+      appendSystemPrompt: () => this.appendSystemPrompt(),
+      alwaysSpeakReminder: (s) => this.alwaysSpeakReminderFor(s),
 
       fireRoutineNow: (pid, routine) => this.fireRoutineNowImpl(pid, routine),
 
@@ -631,7 +635,7 @@ export class SessionManager extends EventEmitter {
       injectMetadataReminder: (msg, session) => maybeInjectMetadataReminder(msg, session),
       buildMessageContent: (text, session, files) => {
         const uploadDir = streaming.getSessionUploadDir(session.platformId, session.threadId);
-        return streaming.buildMessageContent(text, session.platform, uploadDir, files, this.debug);
+        return streaming.buildMessageContent(text, session.platform, uploadDir, files, this.debug, this.transcriber);
       },
     };
   }
@@ -884,6 +888,30 @@ export class SessionManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /** Set custom description and footer for the sticky channel message. */
+  /** Speech-to-text for inbound audio attachments; unset = audio is a plain file. */
+  private transcriber?: Transcriber;
+
+  setTranscriber(transcriber: Transcriber | undefined): void {
+    this.transcriber = transcriber;
+  }
+
+  /** Voice replies: when set, every session's system prompt carries the `say` rules. */
+  private speech?: SpeechConfig;
+
+  setSpeech(speech: SpeechConfig | undefined): void {
+    this.speech = speech;
+  }
+
+  /** The platform prompt appended to every session, plus the voice rules when speech is configured. */
+  private appendSystemPrompt(): string {
+    return this.speech ? `${CHAT_PLATFORM_PROMPT}\n\n${VOICE_REPLIES_PROMPT}` : CHAT_PLATFORM_PROMPT;
+  }
+
+  /** The per-turn "always speak" reminder for a session; '' unless speech is configured and the switch is on. */
+  private alwaysSpeakReminderFor(session: Session): string {
+    return this.speech ? alwaysSpeakReminder(session.sessionId) : '';
+  }
+
   setStickyMessageCustomization(description?: string, footer?: string): void {
     this.customDescription = description;
     this.customFooter = footer;
@@ -1563,12 +1591,12 @@ export class SessionManager extends EventEmitter {
       offerContextPrompt: (s, q, f, e, sender, autoInclude) => contextPrompt.offerContextPrompt(s, q, f, this.getContextPromptHandler(), e, sender, autoInclude),
       buildMessageContent: (text, s, files) => {
         const uploadDir = streaming.getSessionUploadDir(s.platformId, s.threadId);
-        return streaming.buildMessageContent(text, s.platform, uploadDir, files, this.debug);
+        return streaming.buildMessageContent(text, s.platform, uploadDir, files, this.debug, this.transcriber);
       },
       generateWorkSummary: (s) => commands.generateWorkSummary(s),
       getThreadMessagesForContext: (s, limit, excludePostId) => contextPrompt.getThreadMessagesForContext(s, limit, excludePostId),
       formatContextForClaude: (messages, summary) => contextPrompt.formatContextForClaude(messages, summary),
-      appendSystemPrompt: CHAT_PLATFORM_PROMPT,
+      appendSystemPrompt: this.appendSystemPrompt(),
       githubEmailsStore: this.githubEmailsStore,
       memoryStore: this.memoryStore,
       getPlatformMemoryConfig: (pid) => this.platformMemory.get(pid) ?? DEFAULT_MEMORY_CONFIG,

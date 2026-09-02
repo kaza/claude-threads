@@ -46,6 +46,7 @@ import type { SessionContext } from '../session-context/index.js';
 import { createSessionTimers, createSessionLifecycle } from '../../session/types.js';
 import { createMockFormatter } from '../../test-utils/mock-formatter.js';
 import { USER_ATTRIBUTION_NOTE } from '../../commands/system-prompt-generator.js';
+import { CHAT_PLATFORM_PROMPT } from '../../session/lifecycle.js';
 
 function makeSession(): Session {
   return {
@@ -153,6 +154,7 @@ function makePermCtx(): SessionContext {
       getPlatformMemoryConfig: mock(() => ({ enabled: false, repoLayer: false, channelLayer: false, distillation: false })),
       isRoutinesEnabled: mock(() => true),
       isWatchesEnabled: mock(() => true),
+      appendSystemPrompt: () => CHAT_PLATFORM_PROMPT,
     } as unknown as SessionContext['ops'],
   };
 }

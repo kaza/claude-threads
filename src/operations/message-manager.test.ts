@@ -2,7 +2,11 @@
  * Tests for MessageManager
  */
 
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ALWAYS_SPEAK_REMINDER, alwaysSpeakReminder, speakKey } from '../transcription/voice-prompt.js';
 import { MessageManager } from './message-manager.js';
 import type { PlatformClient, PlatformFormatter, PlatformPost } from '../platform/index.js';
 import type { Session } from '../session/types.js';
@@ -988,6 +992,55 @@ describe('MessageManager', () => {
       await manager.handleUserMessage('hi', undefined, 'alice');
 
       expect(session.pendingSideConversations?.length ?? 0).toBe(0);
+    });
+  });
+  describe('voice replies: the always-speak state rides on every follow-up', () => {
+    // The mock session id is test:session-1 → switch key test_session-1.
+    let stateDir: string;
+    let prevEnv: string | undefined;
+
+    beforeEach(() => {
+      stateDir = mkdtempSync(join(tmpdir(), 'speak-state-'));
+      prevEnv = process.env.CLAUDE_THREADS_SPEAK_DIR;
+      process.env.CLAUDE_THREADS_SPEAK_DIR = stateDir;
+    });
+
+    afterEach(() => {
+      if (prevEnv === undefined) delete process.env.CLAUDE_THREADS_SPEAK_DIR;
+      else process.env.CLAUDE_THREADS_SPEAK_DIR = prevEnv;
+      rmSync(stateDir, { recursive: true, force: true });
+    });
+
+    it('prefixes the turn with the reminder while say --on is in force for the session', async () => {
+      writeFileSync(join(stateDir, speakKey(session.sessionId)), '');
+      // What lifecycle wires in when the daemon has a `speech:` block.
+      (manager as unknown as { alwaysSpeakReminderCallback?: () => string }).alwaysSpeakReminderCallback =
+        () => alwaysSpeakReminder(session.sessionId);
+
+      await manager.handleUserMessage('how is the backfill?', undefined, 'alice');
+
+      const sent = (session.claude.sendMessage as any).mock.calls[0][0] as string;
+      expect(sent.startsWith(ALWAYS_SPEAK_REMINDER)).toBe(true);
+      expect(sent).toContain('how is the backfill?');
+    });
+
+    it('sends the turn untouched when the switch is off', async () => {
+      (manager as unknown as { alwaysSpeakReminderCallback?: () => string }).alwaysSpeakReminderCallback =
+        () => alwaysSpeakReminder(session.sessionId);
+
+      await manager.handleUserMessage('how is the backfill?', undefined, 'alice');
+
+      const sent = (session.claude.sendMessage as any).mock.calls[0][0] as string;
+      expect(sent).not.toContain('always speak');
+    });
+
+    it('ignores a stale marker when no reminder callback is wired (speech not configured)', async () => {
+      writeFileSync(join(stateDir, speakKey(session.sessionId)), '');
+
+      await manager.handleUserMessage('how is the backfill?', undefined, 'alice');
+
+      const sent = (session.claude.sendMessage as any).mock.calls[0][0] as string;
+      expect(sent).not.toContain('always speak');
     });
   });
 });
