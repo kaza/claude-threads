@@ -260,6 +260,18 @@ describe('wait_for_reply and the poller', () => {
     expect(result).toEqual({ ok: true, result: { waiting: true }, scheduling: 'SILENT', willContinue: true });
   });
 
+  test('with sequential tools a waiting answer is final (no willContinue), so the model calls again', async () => {
+    calls.stop();
+    calls = await makeCalls({ asyncTools: false });
+    const created = await calls.create(ALICE, 'C1');
+
+    const result = await calls.tool(ALICE, created.callId, { id: 'w0', name: 'wait_for_reply', args: {} });
+
+    expect(result).toEqual({ ok: true, result: { waiting: true }, scheduling: 'SILENT', willContinue: false });
+    const setup = apis.calls('auth_tokens')[0].body.bidiGenerateContentSetup as { tools: Array<{ functionDeclarations: Array<{ behavior?: string }> }> };
+    expect(setup.tools[0].functionDeclarations.every((d) => d.behavior === undefined)).toBe(true);
+  });
+
   test('delivers a settled agent reply with INTERRUPT scheduling, once', async () => {
     const created = await calls.create(ALICE, 'C1');
     for (const history of quiet('Backfill is green.')) {

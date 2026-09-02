@@ -34,11 +34,12 @@ if (!models.ok) fail('model lookup', `${models.status} ${await models.text()}`);
 console.log(`ok  model ${model} exists`);
 
 // 2. A constrained token mints.
-const token = await mintEphemeralToken({ apiKey, fetch, now: () => new Date() }, { model, voiceName: 'Aoede' });
+const token = await mintEphemeralToken({ apiKey, fetch, now: () => new Date() }, { model, voiceName: 'Aoede', asyncTools: (process.env.GEMINI_TOOLS_ASYNC ?? 'true') !== 'false' });
 console.log(`ok  token minted, expires ${token.expireTime}`);
 
 // 3. The constrained socket accepts the locked setup.
-const setup = buildSetup({ model, voiceName: 'Aoede' });
+const asyncTools = (process.env.GEMINI_TOOLS_ASYNC ?? 'true') !== 'false';
+const setup = buildSetup({ model, voiceName: 'Aoede', asyncTools });
 const ws = new WebSocket(`${LIVE_WS_URL}?access_token=${encodeURIComponent(token.name)}`);
 const timeout = setTimeout(() => fail('timeout', 'no answer within 30 s'), 30_000);
 let sawSetup = false;
@@ -60,7 +61,7 @@ ws.addEventListener('message', async (event) => {
   for (const ev of classify(JSON.parse(data))) {
     if (ev.type === 'setupComplete') {
       sawSetup = true;
-      console.log('ok  setupComplete (constraints accepted: audio, tools with NON_BLOCKING, compression, resumption, transcription)');
+      console.log(`ok  setupComplete (constraints accepted: audio, tools ${asyncTools ? 'NON_BLOCKING' : 'sequential'}, compression, resumption, transcription)`);
       ws.send(JSON.stringify(textTurnMessage('Please tell Claude: run the smoke test and report the result.')));
     } else if (ev.type === 'toolCall') {
       const post = ev.calls.find((c) => c.name === 'post_to_channel');

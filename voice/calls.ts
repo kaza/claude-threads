@@ -41,6 +41,12 @@ export interface CallsDeps {
   idleMs?: number;
   /** Called when a user's token turns out to be dead; the app expires their cookie next time. */
   onTokenDead?: (userId: string) => void;
+  /**
+   * The model honours NON_BLOCKING tools (2.5 native-audio). False for a
+   * sequential model (3.1 Flash Live): short waits, no willContinue, and the
+   * instruction stops promising to chat during the wait.
+   */
+  asyncTools?: boolean;
 }
 
 export type ToolResult =
@@ -102,6 +108,7 @@ export class Calls {
   private get waitDeadlineMs() { return this.deps.waitDeadlineMs ?? 25_000; }
   private get postsPerMinute() { return this.deps.postsPerMinute ?? 20; }
   private get idleMs() { return this.deps.idleMs ?? 30 * 60 * 1000; }
+  private get asyncTools() { return this.deps.asyncTools ?? true; }
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -131,8 +138,9 @@ export class Calls {
 
   private async mint(callId: string, resumeHandle?: string): Promise<{ token: string; setup: unknown }> {
     const started = this.deps.now();
-    const setup = buildSetup({ model: this.deps.model, voiceName: this.deps.voiceName, resumeHandle });
-    const minted = await mintEphemeralToken(this.deps.gemini, { model: this.deps.model, voiceName: this.deps.voiceName, resumeHandle });
+    const opts = { model: this.deps.model, voiceName: this.deps.voiceName, resumeHandle, asyncTools: this.asyncTools };
+    const setup = buildSetup(opts);
+    const minted = await mintEphemeralToken(this.deps.gemini, opts);
     this.deps.log(`call=${callId} token minted in ${this.deps.now() - started}ms${resumeHandle ? ' (resume)' : ''}`);
     return { token: minted.name, setup };
   }
@@ -274,7 +282,9 @@ export class Calls {
       if (mailbox.replies.length > 0) return deliver();
       const timer = setTimeout(() => {
         mailbox.waiters = mailbox.waiters.filter((w) => w !== wake);
-        resolve({ ok: true, result: { waiting: true }, scheduling: 'SILENT', willContinue: true });
+        // Async model: the function stays open (willContinue). Sequential model:
+        // this IS the final answer, and the model is told to call again.
+        resolve({ ok: true, result: { waiting: true }, scheduling: 'SILENT', willContinue: this.asyncTools });
       }, this.waitDeadlineMs);
       const wake = () => {
         clearTimeout(timer);

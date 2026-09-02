@@ -202,7 +202,8 @@ back.
 | Var | What |
 |---|---|
 | `GEMINI_API_KEY` | ⚠️ **none exists in VVS today** — Almir provides one (Google AI Studio key on a VVS Google account; set a budget alert). Not the Gemini CLI's OAuth login |
-| `WAIT_DEADLINE_MS` | how long `wait_for_reply` may hold before answering `waiting`; default 25 000. Set ~3 000 for a model that blocks on tools (3.1 Flash Live) so it regains its voice quickly |
+| `GEMINI_TOOLS_ASYNC` | `true` for a model that honours `NON_BLOCKING` (2.5 native-audio); `false` for a sequential one (3.1 Flash Live): declarations carry no behaviour, `waiting` is a final answer the model is told to repeat, the instruction stops promising to chat during the wait, and the wait deadline defaults to 3 s |
+| `WAIT_DEADLINE_MS` | how long `wait_for_reply` may hold before answering `waiting`; default 25 000 (async) / 3 000 (sequential) |
 | `GEMINI_LIVE_MODEL` | default `gemini-2.5-flash-native-audio-preview-12-2025`. The 2.5 native-audio model carries different ids on AI Studio and Vertex; verified against `GET /v1beta/models` with the key at install, and it must be one that supports `NON_BLOCKING` tools |
 | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | from the Claude Code app's *Basic Information* |
 | `SLACK_TEAM_ID` | `T0BFTMW5H0W` |
@@ -350,7 +351,7 @@ the switch to 3.1 is one env line plus `WAIT_DEADLINE_MS`.
 | Separate service, not a claude-threads feature | the daemon must stay an upstream-shaped bot; the control-plane decision says any voice front-end is a writer into Slack |
 | Relay posts as the signed-in user (user token) | the daemon ignores all bot-authored messages; also honest attribution for teammates |
 | Sign in with Slack as the only login | one step gives identity, workspace membership check and the per-user token; nothing shared to leak |
-| Gemini Live, `gemini-2.5-flash-native-audio-preview-12-2025` | GPT-Live is not an API; Gemini's token constraints lock the front desk server-side, its async tools avoid dead air, and only the 2.5 native-audio model has them (Almir's call, 2026-09-02) |
+| Gemini Live, `gemini-3.1-flash-live-preview` on the box, sequential-tools mode | Almir's call, 2026-09-02, after both models were measured: the newer voice and the steadier socket (ID-Austria runs it) over 2.5's async tools. The cost is dead air during a wait, bounded by the 3 s deadline. 2.5 native-audio stays the code default and is one env line back |
 | Raw WebSocket + AudioWorklet, no SDK | zero dependencies in the fork; the protocol is a dozen JSON shapes |
 | Browser executes tool calls via voice-desk | Gemini's `toolCall` arrives on the browser's socket by design; the browser holds nothing but a cookie and a one-use token |
 | Calls keyed by random id, owned by a user | tabs and reconnects must not share or clobber state |
