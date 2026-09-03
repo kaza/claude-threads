@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { resolveVoiceDeskConfig, voiceLink, voiceLinkMessage, VOICE_SHORTCUT_CALLBACK } from './index.js';
-import { parseCommand } from '../commands/parser.js';
+import { parseCommand, parseCommandWithRemainder } from '../commands/parser.js';
 import { COMMAND_REGISTRY } from '../commands/registry.js';
 
 const formatter = {
@@ -36,6 +36,8 @@ describe('voice link', () => {
 describe('!voice command', () => {
   it('parses', () => {
     expect(parseCommand('!voice')).toMatchObject({ command: 'voice' });
+    // The first message in a channel goes through the immediate list (Codex review).
+    expect(parseCommandWithRemainder('!voice')).toMatchObject({ command: 'voice' });
   });
 
   it('is listed for users in the registry', () => {

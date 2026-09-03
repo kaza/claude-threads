@@ -230,6 +230,7 @@ const STACKABLE_PATTERNS: Array<[string, RegExp, number, number]> = [
  * Patterns for immediate first-message commands (no stacking, return immediately).
  */
 const IMMEDIATE_PATTERNS: Array<[string, RegExp]> = [
+  ['voice', /^!voice\s*$/i],
   ['help', /^!help\s*$/i],
   ['release-notes', /^!(?:release-notes|changelog)\s*$/i],
   ['update', /^!update\s*$/i],
