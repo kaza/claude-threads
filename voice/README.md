@@ -39,3 +39,16 @@ GEMINI_API_KEY=… bun voice/smoke.ts some-model # try another id
 
 Sync the changed files, then `sudo systemctl restart voice-desk`. No build step:
 Bun runs the TypeScript directly and the browser loads `public/` as-is.
+
+## Starting a call from Slack
+
+`!voice` in a task channel, or the message shortcut **Talk to this channel**, answers with
+`<voiceDesk.url>/?channel=<id>`. Daemon config:
+
+```yaml
+voiceDesk:
+  url: https://agents.vvs-capital.com/voice
+```
+
+Slack app: Interactivity on, a message shortcut with callback ID `voice_call`. Details and
+the phone caveats: `docs/voice-desk-spec.md` § Starting a call from Slack.

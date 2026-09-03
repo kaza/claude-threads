@@ -4,6 +4,7 @@
 
 import type { AutoUpdateConfig, AutoRestartMode, ScheduledWindow } from '../auto-update/types.js';
 import type { DirectChannelModeConfig, ApprovalsMode } from '../platform/utils.js';
+import type { VoiceDeskConfig } from '../voice-desk/index.js';
 
 // Re-export auto-update types for convenience
 export type { AutoUpdateConfig, AutoRestartMode, ScheduledWindow };
@@ -368,6 +369,12 @@ export interface Config {
   stickyMessage?: StickyMessageCustomization; // Optional sticky message customization
   /** Optional Claude account pool. When omitted, bot runs in single-account mode. */
   claudeAccounts?: ClaudeAccount[];
+  /**
+   * The voice-desk service (docs/voice-desk-spec.md), when one runs beside
+   * the daemon: `!voice` and the Slack "Talk to this channel" shortcut answer
+   * with a link into it. Omitted = no voice.
+   */
+  voiceDesk?: VoiceDeskConfig;
   platforms: PlatformInstanceConfig[];
 }
 

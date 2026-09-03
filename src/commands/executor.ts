@@ -6,6 +6,7 @@
  */
 
 import { COMMAND_REGISTRY } from './registry.js';
+import { voiceLinkMessage } from '../voice-desk/index.js';
 import type { PermissionMode } from '../config/index.js';
 import type {
   CommandExecutorContext,
@@ -584,7 +585,24 @@ function createPassthroughHandler(slashCommand: string): CommandHandler {
 // Register Handlers
 // =============================================================================
 
+/**
+ * `!voice`: the link that opens the voice page on this channel. Works before
+ * a session exists — that is the point of it on a phone.
+ */
+const handleVoice: CommandHandler = async (ctx) => {
+  const url = ctx.sessionManager.getVoiceDeskUrl();
+  const channelId = ctx.client.getMcpConfig().channelId;
+  await ctx.client.createPost(
+    url
+      ? voiceLinkMessage(ctx.formatter, url, channelId)
+      : `🎙️ ${ctx.formatter.formatBold('No voice-desk configured')}: set ${ctx.formatter.formatCode('voiceDesk.url')} in config.yaml.`,
+    ctx.threadId,
+  );
+  return { handled: true };
+};
+
 handlers.set('help', handleHelp);
+handlers.set('voice', handleVoice);
 handlers.set('release-notes', handleReleaseNotes);
 handlers.set('update', handleUpdate);
 handlers.set('stop', handleStop);

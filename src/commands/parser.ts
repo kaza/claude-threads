@@ -54,6 +54,7 @@ const COMMAND_PATTERNS: Array<[string, RegExp]> = [
   ['approve', /^!(?:approve|yes)\s*$/i],
   ['help', /^!help\s*$/i],
   ['release-notes', /^!(?:release-notes|changelog)\s*$/i],
+  ['voice', /^!voice\s*$/i],
 
   // Directory/worktree
   ['cd', /^!cd\s+(.+)$/i],
