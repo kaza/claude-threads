@@ -227,6 +227,13 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     isStackable: true,  // !permissions <mode> can be followed by more commands or prompt
   },
   {
+    command: 'voice',
+    description: 'Link to talk to this channel by voice (voice-desk)',
+    category: 'session',
+    audience: 'user',
+    worksInFirstMessage: true,
+  },
+  {
     command: 'mentions',
     description: 'Toggle quiet mode: only respond when @mentioned by name',
     args: 'on / off',

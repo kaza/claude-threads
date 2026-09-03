@@ -6,6 +6,7 @@ import type {
   PlatformReaction,
   PlatformFile,
   ThreadMessage,
+  PlatformShortcut,
 } from './types.js';
 import type { PlatformFormatter } from './formatter.js';
 
@@ -24,6 +25,8 @@ export interface PlatformClientEvents {
   reaction_removed: (reaction: PlatformReaction, user: PlatformUser | null) => void;
   /** Emitted when someone posts at channel level (not in a thread) */
   channel_post: (post: PlatformPost, user: PlatformUser | null) => void;
+  /** Emitted when a person invokes an app shortcut (Slack only). */
+  shortcut: (shortcut: PlatformShortcut) => void;
   /**
    * Emitted for a post in a direct-message channel that is NOT this client's
    * configured channel, when DM auto-discovery is enabled (Mattermost only).
@@ -161,6 +164,12 @@ export interface PlatformClient extends EventEmitter {
     appToken?: string;
     outboundFiles?: { enabled?: boolean; maxBytes?: number };
   };
+
+  /**
+   * Post a message only one person sees (Slack `chat.postEphemeral`).
+   * Optional: platforms without the concept leave it undefined.
+   */
+  postEphemeral?(channelId: string, userId: string, text: string): Promise<void>;
 
   /**
    * Get the platform-specific markdown formatter

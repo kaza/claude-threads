@@ -54,6 +54,7 @@ const COMMAND_PATTERNS: Array<[string, RegExp]> = [
   ['approve', /^!(?:approve|yes)\s*$/i],
   ['help', /^!help\s*$/i],
   ['release-notes', /^!(?:release-notes|changelog)\s*$/i],
+  ['voice', /^!voice\s*$/i],
 
   // Directory/worktree
   ['cd', /^!cd\s+(.+)$/i],
@@ -234,6 +235,7 @@ const STACKABLE_PATTERNS: Array<[string, RegExp, number, number]> = [
  * different question, which is worse than not running at all.
  */
 const IMMEDIATE_PATTERNS: Array<[string, RegExp, number?]> = [
+  ['voice', /^!voice\s*$/i],
   ['help', /^!help\s*$/i],
   ['release-notes', /^!(?:release-notes|changelog)\s*$/i],
   ['update', /^!update\s*$/i],

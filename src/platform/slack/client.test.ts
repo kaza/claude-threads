@@ -573,3 +573,41 @@ describe('SlackClient bot-authored filter', () => {
     expect(seen).toEqual([{ userId: 'U-ALMIR' }]);
   });
 });
+
+describe('SlackClient shortcuts (voice-desk)', () => {
+  it('a message shortcut envelope becomes a shortcut event with channel, message and user', async () => {
+    const client = makeClient();
+    const seen: unknown[] = [];
+    client.on('shortcut', (s) => seen.push(s));
+
+    (client as any).handleSocketModeEvent({
+      type: 'interactive',
+      envelope_id: 'e1',
+      payload: { type: 'message_action', callback_id: 'voice_call', trigger_id: 'T.1', user: { id: 'U-ALMIR' }, channel: { id: 'C1' }, message: { ts: '1.2' } },
+    });
+
+    expect(seen).toEqual([{ callbackId: 'voice_call', userId: 'U-ALMIR', channelId: 'C1', postId: '1.2', triggerId: 'T.1' }]);
+  });
+
+  it('a global shortcut has no channel; block actions are ignored', async () => {
+    const client = makeClient();
+    const seen: unknown[] = [];
+    client.on('shortcut', (s) => seen.push(s));
+
+    (client as any).handleSocketModeEvent({ type: 'interactive', envelope_id: 'e2', payload: { type: 'shortcut', callback_id: 'voice_call', user: { id: 'U1' } } });
+    (client as any).handleSocketModeEvent({ type: 'interactive', envelope_id: 'e3', payload: { type: 'block_actions', user: { id: 'U1' } } });
+
+    expect(seen).toEqual([{ callbackId: 'voice_call', userId: 'U1', channelId: undefined, postId: undefined, triggerId: undefined }]);
+  });
+
+  it('postEphemeral calls chat.postEphemeral for one user in one channel', async () => {
+    fetchResponder = () => ok({});
+    const client = makeClient();
+
+    await client.postEphemeral('C1', 'U-ALMIR', 'the link');
+
+    expect(fetchCalls[0].url).toBe('https://mock.slack.test/api/chat.postEphemeral');
+    const body = fetchCalls[0].body as Record<string, unknown>;
+    expect(body).toMatchObject({ channel: 'C1', user: 'U-ALMIR', text: 'the link' });
+  });
+});

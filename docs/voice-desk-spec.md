@@ -248,6 +248,64 @@ Bot scopes are untouched.
   every tool call with duration in ms, every Slack API call with status and
   `Retry-After` when present, every token mint. No message text.
 
+## Starting a call from Slack (round 1b, 2026-09-03)
+
+A call needs the page open with the right channel. On a laptop that is a
+bookmark; on a phone it must be one tap from inside Slack. Two ways in, both
+answering with the same link, `<voiceDesk.url>/?channel=<channel id>`:
+
+| Way | What happens |
+|---|---|
+| `!voice` in a task channel | the daemon posts the link (a normal post, visible to the channel) plus the one line phones get wrong: on an iPhone open it in Safari, the in-app browser has no microphone. Works before a session exists |
+| Slack message shortcut **"Talk to this channel"** (`callback_id: voice_call`) | the daemon answers with the same text as an ephemeral message, seen only by the person who invoked it. A message shortcut carries the channel; a global one does not and is ignored with a log line |
+
+Daemon side (`src/voice-desk/`): one top-level config value,
+`voiceDesk: { url }`, validated at boot (http(s), no query or fragment); a
+`!voice` command (parser, registry, executor) reading the URL from the
+session manager; the Slack client turns `interactive` envelopes of type
+`message_action` / `shortcut` into a `shortcut` platform event and gains
+`postEphemeral` (`chat.postEphemeral`, covered by the bot's `chat:write`);
+`index.ts` wires the event. The daemon knows only the URL; the service is
+unchanged except that the page now keeps `?channel=` across the Slack
+sign-in round trip (parked in `sessionStorage`, since `oauth/start` drops the
+query).
+
+Slack app, once (Almir): *Interactivity & Shortcuts* → Interactivity **on**
+(Socket Mode, so no Request URL), *Create New Shortcut* → **On messages**,
+name `Talk to this channel`, description `Open voice-desk on this channel`,
+callback ID `voice_call`. No new scopes. Manifest form:
+
+```yaml
+features:
+  shortcuts:
+    - name: Talk to this channel
+      type: message
+      callback_id: voice_call
+      description: Open voice-desk on this channel
+settings:
+  interactivity:
+    is_enabled: true
+```
+
+Phones, honestly: Slack on iPhone opens links in its in-app browser, which
+cannot use the microphone, so the reply says *Open in Safari*; once there,
+*Add to Home Screen* makes it an app with a working mic. Android's Slack
+uses a Chrome tab and the mic works directly. On any phone the call drops
+when the screen locks or the app is switched: mobile browsers suspend
+audio in the background.
+
+Why the daemon and not the service: the shortcut and the command arrive on
+the daemon's Socket Mode connection; the service has no bot token and
+should not get one. Why an ephemeral for the shortcut but a normal post for
+`!voice`: `!voice` is typed in public and the link is not a secret; the
+shortcut is a personal gesture and its answer would otherwise be noise for
+everyone else.
+
+Tests: config validation; link and message text; `!voice` parses and is
+listed; the Slack client turns a `message_action` into a `shortcut` event
+(and a `block_actions` into nothing); `postEphemeral` sends channel, user,
+text.
+
 ## Out of scope for round 1
 
 Phone/SIP (round 2 — Gemini has no SIP, that route would go through a Twilio

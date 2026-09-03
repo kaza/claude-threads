@@ -618,6 +618,29 @@ export class SlackClient extends BasePlatformClient {
       this.appId = envelope.connection_info.app_id;
     }
 
+    // Interactive envelopes: a message or global shortcut becomes a
+    // 'shortcut' event; block actions and views are not handled (yet).
+    if (envelope.type === 'interactive' && envelope.payload) {
+      const p = envelope.payload as unknown as {
+        type?: string;
+        callback_id?: string;
+        trigger_id?: string;
+        user?: { id?: string };
+        channel?: { id?: string };
+        message?: { ts?: string };
+      };
+      if ((p.type === 'message_action' || p.type === 'shortcut') && p.callback_id && p.user?.id) {
+        this.emit('shortcut', {
+          callbackId: p.callback_id,
+          userId: p.user.id,
+          channelId: p.channel?.id,
+          postId: p.message?.ts,
+          triggerId: p.trigger_id,
+        });
+      }
+      return;
+    }
+
     // Handle events_api envelopes
     if (envelope.type === 'events_api' && envelope.payload?.event) {
       if (envelope.payload.api_app_id) this.appId = envelope.payload.api_app_id;
@@ -1096,6 +1119,11 @@ export class SlackClient extends BasePlatformClient {
    * @param threadId - Optional thread parent ID
    * @param options - Optional settings (e.g., unfurl control)
    */
+  /** A message only `userId` sees, in `channelId` (bot scope chat:write). */
+  async postEphemeral(channelId: string, userId: string, text: string): Promise<void> {
+    await this.api<SlackApiResponse>('POST', 'chat.postEphemeral', { channel: channelId, user: userId, text });
+  }
+
   async createPost(
     message: string,
     threadId?: string,

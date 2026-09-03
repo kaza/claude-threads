@@ -53,7 +53,12 @@ async function api(path, body) {
   return data;
 }
 
-function showSignedOut() { el.signin.hidden = false; el.desk.hidden = true; }
+function showSignedOut() {
+  const wanted = new URLSearchParams(location.search).get('channel');
+  if (wanted) sessionStorage.setItem('voice.channel', wanted);
+  el.signin.hidden = false;
+  el.desk.hidden = true;
+}
 
 // ---------------------------------------------------------------------------
 // The call
@@ -281,7 +286,10 @@ async function init() {
     el.who.textContent = me.name;
     const { channels } = await api('channels');
     el.channel.replaceChildren(...channels.map((c) => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.name; return o; }));
-    const wanted = new URLSearchParams(location.search).get('channel');
+    // ?channel= from a !voice link or the Slack shortcut; the Slack sign-in
+    // round trip drops the query, so it is parked in sessionStorage meanwhile.
+    const wanted = new URLSearchParams(location.search).get('channel') ?? sessionStorage.getItem('voice.channel');
+    sessionStorage.removeItem('voice.channel');
     if (wanted && channels.some((c) => c.id === wanted)) el.channel.value = wanted;
     if (channels.length === 0) say('note', 'No task channels yet: invite the Claude Code bot to a channel and @-mention it once.');
     el.desk.hidden = false;

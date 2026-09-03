@@ -135,6 +135,8 @@ export class SessionManager extends EventEmitter {
 
   // Background tasks
   private sessionMonitor: SessionMonitor | null = null;       // Idle timeout + sticky refresh (1 min)
+  /** voice-desk page, when configured (docs/voice-desk-spec.md). */
+  private voiceDeskUrl: string | null = null;
   private backgroundCleanup: CleanupScheduler | null = null;  // Logs + worktrees cleanup (1 hour)
 
   // Shutdown flag
@@ -2017,5 +2019,17 @@ export class SessionManager extends EventEmitter {
       session.claude.kill();
     }
     this.registry.clear();
+  }
+
+  // ---------------------------------------------------------------------------
+  // voice-desk (docs/voice-desk-spec.md)
+  // ---------------------------------------------------------------------------
+
+  setVoiceDesk(url: string): void {
+    this.voiceDeskUrl = url;
+  }
+
+  getVoiceDeskUrl(): string | null {
+    return this.voiceDeskUrl;
   }
 }

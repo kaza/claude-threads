@@ -43,6 +43,18 @@ export interface PlatformReaction {
 }
 
 /**
+ * A shortcut a person invoked from the platform UI (Slack: message or global
+ * shortcut). `channelId`/`postId` are present for message shortcuts only.
+ */
+export interface PlatformShortcut {
+  callbackId: string;
+  userId: string;
+  channelId?: string;
+  postId?: string;
+  triggerId?: string;
+}
+
+/**
  * Normalized file attachment representation across platforms
  */
 export interface PlatformFile {

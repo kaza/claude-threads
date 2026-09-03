@@ -27,6 +27,8 @@ import { runOnboarding } from './onboarding.js';
 import { MattermostClient, SlackClient, type PlatformClient, type PlatformPost, type PlatformUser } from './platform/index.js';
 import { SessionManager } from './session/index.js';
 import { createTranscriber, validateSpeechConfig } from './transcription/index.js';
+import { resolveVoiceDeskConfig, voiceLinkMessage, VOICE_SHORTCUT_CALLBACK } from './voice-desk/index.js';
+import type { PlatformShortcut } from './platform/types.js';
 import { SessionStore } from './persistence/session-store.js';
 import { configureAuditLog } from './persistence/audit-log.js';
 import { checkForUpdates } from './update-notifier.js';
@@ -118,6 +120,31 @@ function wirePlatformEvents(
         process.exit(0);
       },
     });
+  });
+
+  // A "Talk to this channel" shortcut answers, to that person only, with the
+  // voice-desk link for the channel it was invoked in. Only the client that
+  // owns a socket emits this (derived channel clients get events injected,
+  // never from the socket), and Slack delivers an interactive payload to one
+  // connection, so it fires exactly once per invocation — no channel guard
+  // needed, and one would be wrong: the socket owner's channel is not the
+  // shortcut's. The envelope is ACKed before the client emits.
+  client.on('shortcut', async (shortcut: PlatformShortcut) => {
+    if (shortcut.callbackId !== VOICE_SHORTCUT_CALLBACK) return;
+    const url = session.getVoiceDeskUrl();
+    if (!url) {
+      ui.addLog({ level: 'warn', component: 'voice', message: `shortcut ${shortcut.callbackId} ignored: no voiceDesk.url in config` });
+      return;
+    }
+    if (!shortcut.channelId || !client.postEphemeral) {
+      ui.addLog({ level: 'warn', component: 'voice', message: `shortcut ${shortcut.callbackId} ignored: no channel (use it on a message in the channel)` });
+      return;
+    }
+    try {
+      await client.postEphemeral(shortcut.channelId, shortcut.userId, voiceLinkMessage(client.getFormatter(), url, shortcut.channelId));
+    } catch (err) {
+      ui.addLog({ level: 'error', component: 'voice', message: `voice shortcut reply failed: ${(err as Error).message}` });
+    }
   });
 
   // Wire up connection status events to UI
@@ -673,6 +700,13 @@ async function startWithoutDaemon() {
   if (config.speech) {
     session.setSpeech(validateSpeechConfig(config.speech));
     ui.addLog({ level: 'info', component: 'speech', message: `🔊 Voice replies enabled (voice ${config.speech.voiceId})` });
+  }
+
+  // voice-desk (docs/voice-desk-spec.md): a bad block fails the boot, not the
+  // first !voice.
+  if (config.voiceDesk) {
+    session.setVoiceDesk(resolveVoiceDeskConfig(config.voiceDesk, 'voiceDesk').url);
+    ui.addLog({ level: 'info', component: 'voice', message: `🎙️ voice-desk at ${config.voiceDesk.url}: !voice and the "Talk to this channel" shortcut are on` });
   }
 
   // Set reference for toggle callbacks
