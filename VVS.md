@@ -23,6 +23,8 @@ vvs   ── main ⊕ every pr/* ⊕ every local/*   ← the agent box runs this
   `vvs` by re-merging, run `bun test src/ && bun test voice/`, deploy.
 - Merged PRs: delete the `pr/*` branch; its commits now come through `main`.
 
+- **Never rebase a branch that `vvs` has already merged.** Rebasing rewrites its commits, and the next merge into `vvs` conflicts on every file the branch touches (2026-09-03, `local/voice-desk`). To pick up a newer `main`, merge `main` *into* the branch; rebase only a branch that has never been merged anywhere.
+
 The reasoning and the deploy steps are in the VVS handbook,
 `systems/CLAUDE-THREADS.md` § Branch model.
 
