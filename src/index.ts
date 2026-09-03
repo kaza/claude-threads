@@ -102,7 +102,12 @@ function wirePlatformEvents(
   });
 
   // A "Talk to this channel" shortcut answers, to that person only, with the
-  // voice-desk link for the channel it was invoked in.
+  // voice-desk link for the channel it was invoked in. Only the client that
+  // owns a socket emits this (derived channel clients get events injected,
+  // never from the socket), and Slack delivers an interactive payload to one
+  // connection, so it fires exactly once per invocation — no channel guard
+  // needed, and one would be wrong: the socket owner's channel is not the
+  // shortcut's. The envelope is ACKed before the client emits.
   client.on('shortcut', async (shortcut: PlatformShortcut) => {
     if (shortcut.callbackId !== VOICE_SHORTCUT_CALLBACK) return;
     const url = session.getVoiceDeskUrl();
