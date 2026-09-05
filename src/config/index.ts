@@ -33,6 +33,7 @@ export {
   MEMORY_DISABLED,
   resolveMemoryConfig,
   resolveRoutinesEnabled,
+  resolveTranscriptionEnabled,
   resolveWatchesEnabled,
   resolveAuditLogEnabled,
   LIMITS_DEFAULTS,

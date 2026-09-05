@@ -13,6 +13,7 @@ import {
   resolveAuditLogEnabled,
   resolveRoutinesEnabled,
   resolveWatchesEnabled,
+  resolveTranscriptionEnabled,
   isOverheadVisibility,
   OVERHEAD_VISIBILITY_VALUES,
   type MattermostPlatformConfig,
@@ -785,6 +786,10 @@ async function startWithoutDaemon() {
         platformConfig.watches,
         `platforms[${platformConfig.id}].watches`,
       ),
+      transcriptionEnabled: resolveTranscriptionEnabled(
+        platformConfig.transcription,
+        `platforms[${platformConfig.id}].transcription`,
+      ),
     });
 
     // Wire up platform events
@@ -836,6 +841,12 @@ async function startWithoutDaemon() {
         watchesEnabled: resolveWatchesEnabled(
           dmConfig.watches,
           `dm[${dmConfig.id}].watches`,
+        ),
+        // A derived DM instance inherits the parent's setting: the consent
+        // that matters was given when the parent channel was configured.
+        transcriptionEnabled: resolveTranscriptionEnabled(
+          dmConfig.transcription,
+          `dm[${dmConfig.id}].transcription`,
         ),
       });
       wirePlatformEvents(dmConfig.id, dmClient, session, ui, dmConfig.directChannelMode);

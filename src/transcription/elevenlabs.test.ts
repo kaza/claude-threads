@@ -59,24 +59,71 @@ describe('ElevenLabsTranscriber', () => {
     expect(form.get('language_code')).toBe('hrv');
   });
 
-  test('rejects with status and body excerpt on a non-2xx response', async () => {
+  test('repeats the status CODE and not the prose beside it', async () => {
+    // The code is an identifier from a fixed vocabulary and is the actionable
+    // half. The `message` is prose the vendor composes — it can carry the
+    // request we sent, a key fragment, or an internal id — so it never
+    // reaches the channel, only the log.
     const path = await writeAudioFixture();
-    const { fn } = fakeFetch({ status: 401, body: { detail: { status: 'invalid_api_key', message: 'Invalid API key' } } });
+    const { fn } = fakeFetch({
+      status: 401,
+      body: { detail: { status: 'invalid_api_key', message: 'Invalid API key sk-live-abc123 for org 42' } },
+    });
     const transcriber = new ElevenLabsTranscriber({ provider: 'elevenlabs', apiKey: 'bad' }, fn);
 
     const attempt = transcriber.transcribe({ path, mimeType: 'audio/webm', name: 'voice.webm' });
 
-    await expect(attempt).rejects.toThrow('ElevenLabs HTTP 401: Invalid API key (invalid_api_key)');
+    await expect(attempt).rejects.toThrow('ElevenLabs HTTP 401: invalid api key');
+    await expect(attempt).rejects.not.toThrow(/sk-live-abc123|org 42/);
   });
 
-  test('falls back to a raw body excerpt when the error is not JSON', async () => {
+  test('will not repeat a status that stopped looking like an identifier', async () => {
+    // A vendor that starts putting sentences in this field does not get to
+    // publish them into a channel by surprise.
     const path = await writeAudioFixture();
-    const { fn } = fakeFetch({ status: 502, body: '<html>Bad Gateway</html>' });
+    const { fn } = fakeFetch({
+      status: 400,
+      body: { detail: { status: 'Your request to https://internal.vendor/x failed, token=abc' } },
+    });
     const transcriber = new ElevenLabsTranscriber({ provider: 'elevenlabs', apiKey: 'k' }, fn);
 
     const attempt = transcriber.transcribe({ path, mimeType: 'audio/webm', name: 'voice.webm' });
 
-    await expect(attempt).rejects.toThrow('ElevenLabs HTTP 502: <html>Bad Gateway</html>');
+    await expect(attempt).rejects.toThrow('could not classify');
+    await expect(attempt).rejects.not.toThrow(/internal\.vendor|token=abc/);
+  });
+
+  test('withholds an unrecognised error body instead of publishing it', async () => {
+    // This message is posted into a chat channel. A vendor error body is not
+    // ours to publish — it can carry the request we sent, echoed headers, or
+    // internal identifiers. The status is the actionable part; the body goes
+    // to the log.
+    const path = await writeAudioFixture();
+    const { fn } = fakeFetch({
+      status: 502,
+      body: '<html>Bad Gateway</html> request_id=abc123 x-api-key=leaked',
+    });
+    const transcriber = new ElevenLabsTranscriber({ provider: 'elevenlabs', apiKey: 'k' }, fn);
+
+    const attempt = transcriber.transcribe({ path, mimeType: 'audio/webm', name: 'voice.webm' });
+
+    await expect(attempt).rejects.toThrow('ElevenLabs HTTP 502');
+    await expect(attempt).rejects.not.toThrow(/leaked|request_id|Bad Gateway/);
+  });
+
+  test('a hostile detail cannot flood a channel', async () => {
+    const path = await writeAudioFixture();
+    const { fn } = fakeFetch({
+      status: 400,
+      body: { detail: { status: 'bad_request', message: 'x'.repeat(5000) } },
+    });
+    const transcriber = new ElevenLabsTranscriber({ provider: 'elevenlabs', apiKey: 'k' }, fn);
+
+    const attempt = transcriber
+      .transcribe({ path, mimeType: 'audio/webm', name: 'voice.webm' })
+      .catch((err: Error) => err.message);
+
+    expect((await attempt).length).toBeLessThan(100);
   });
 
   test('rejects when the response carries no text', async () => {
@@ -89,7 +136,7 @@ describe('ElevenLabsTranscriber', () => {
     await expect(attempt).rejects.toThrow(/empty transcript/);
   });
 
-  test('names the read failure when the error body itself cannot be read', async () => {
+  test('still reports the status when the error body itself cannot be read', async () => {
     const path = await writeAudioFixture();
     const unreadable = (async () => ({
       ok: false,
@@ -100,7 +147,10 @@ describe('ElevenLabsTranscriber', () => {
 
     const attempt = transcriber.transcribe({ path, mimeType: 'audio/webm', name: 'voice.webm' });
 
-    await expect(attempt).rejects.toThrow('ElevenLabs HTTP 500: <body unreadable: Error: socket hang up>');
+    // The status still reaches the channel; the unreadable-body detail does
+    // not, for the same reason a readable one does not.
+    await expect(attempt).rejects.toThrow('ElevenLabs HTTP 500');
+    await expect(attempt).rejects.not.toThrow(/socket hang up/);
   });
 
   test('reports itself as the elevenlabs provider', () => {

@@ -129,6 +129,18 @@ transcription:
 | `model` | Provider model id | `scribe_v2` |
 | `languageCode` | Language hint, passed through verbatim (ElevenLabs accepts ISO-639-1 and ISO-639-3). Omit to auto-detect. | auto-detect |
 
+Per-platform opt-out:
+
+```yaml
+platforms:
+  - id: legal
+    transcription: false    # this channel's audio never leaves the box
+```
+
+The provider and its key are a property of the **deployment** — one vendor account per daemon — so they live at the top level. Whether a given channel's audio should be sent to that vendor is a property of the **channel**, which is what `transcription: false` answers. It gates every path that could reach the vendor, including watch evaluation.
+
+⚠️ **A transcript is user input, not narration.** It reaches Claude as message text and is evaluated by watches exactly as a typed message is — deliberately, so a watch on "deploy" fires when somebody says "deploy" out loud rather than only when they type it. The usual prompt-injection caution therefore applies in full: a voice note can say "ignore your instructions" as easily as a typed message can, and anyone who can post audio in the channel can attempt it. Treat the audio surface as exactly as trusted as the text one, because it is.
+
 What happens: every `audio/*` attachment (or a file with an audio extension when the platform only reported a generic type) is transcribed after it is saved. Claude receives the usual file list **and** a `[Transcript of voice.webm (elevenlabs):]` block, and the bot posts the transcript back into the thread as a quote so everyone can see what Claude heard. A transcription failure is reported like a skipped file — the audio file itself still reaches Claude. A bad `provider` or missing `apiKey` fails the boot. Details: [`docs/audio-transcription-spec.md`](audio-transcription-spec.md).
 
 ### Voice replies (`speech`)
@@ -620,6 +632,14 @@ claudeAccounts:
 | `home` | One of | Alternate `$HOME` containing `.claude/.credentials.json` from a prior `HOME=<path> claude login`. For OAuth Pro/Max subscriptions. Session history also lives here, so resumed sessions pick the same account. |
 | `apiKey` | One of | Anthropic API key. Billed against that key; session history stays under the bot's default `HOME`. |
 | `displayName` | No | Human-readable label in UI (defaults to `id`) |
+
+⚠️ An account with `home` owns the **whole** Claude profile, not just its
+credentials: user settings, hooks and global MCP configuration are read from
+that home too. Anything the daemon inherited that could point elsewhere — an
+API key, a bearer token, `CLAUDE_CONFIG_DIR` — is cleared for that child, or
+the account you selected would be silently overridden by the one the daemon
+runs as. Daemon-level hooks and settings therefore do **not** carry into a
+pooled account; put them in the account's own home.
 
 Exactly one of `home` or `apiKey` should be set per account. Persisted sessions record which account they ran under and resume on the same one.
 
