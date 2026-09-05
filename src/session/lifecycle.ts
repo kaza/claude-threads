@@ -502,6 +502,7 @@ function createMessageManager(
     worktreeBranch: session.worktreeInfo?.branch,
     alwaysSpeakReminder: () => ctx.ops.alwaysSpeakReminder(session),
     toolActivity: ctx.ops.getPlatformOverhead(session.platformId).tools,
+    turnMarker: ctx.ops.getPlatformOverhead(session.platformId).turnMarker,
     registerPost: (postId, options) => {
       ctx.ops.registerPost(postId, session.threadId);
       postTracker.register(postId, session.threadId, session.sessionId, options);

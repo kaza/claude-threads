@@ -26,6 +26,8 @@ export type {
   ToolActivityMode,
   ToolDetailsMode,
   ToolActivitySettings,
+  TurnMarkerMode,
+  TurnMarkerSettings,
   MemoryOption,
   ResolvedMemoryConfig,
 } from './types.js';
@@ -50,6 +52,9 @@ export {
   DEFAULT_TOOL_ACTIVITY,
   DEFAULT_TOOL_DETAILS_DIR,
   resolveToolActivity,
+  DEFAULT_TURN_MARKER,
+  TURN_COMPLETE_EVENT_TYPE,
+  resolveTurnMarker,
 } from './types.js';
 
 import type { Config, WorktreeMode as WorktreeModeType, PermissionMode, OverheadVisibility } from './types.js';
