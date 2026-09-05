@@ -44,22 +44,33 @@ describe('collectUsage mode selection', () => {
     expect(rows[0].error).toMatch(/no longer configured/i);
   });
 
-  it('falls back to discovery when the pool is empty or absent', async () => {
-    // Not asserting which profiles exist — only that it did NOT take the pool
-    // path, which would have produced the pool's ids.
-    for (const accounts of [[], undefined]) {
-      const rows = await collectUsage({ all: true, accounts });
-      expect(rows.map((r) => r.profile)).not.toContain('alpha');
-    }
-  });
+  // The no-pool path is deliberately NOT exercised here: it spawns a real
+  // `claude -p "/usage"` probe, which would make this suite depend on a CLI
+  // being installed and logged in. `accountTargets` returning no targets is
+  // the branch decision itself, and accounts.test.ts pins it — everything
+  // after that point is one probe of the account this process already runs
+  // as, with no directory scan anywhere in it.
 });
 
 describe('the plan badge reaches the rendered output', () => {
-  it('renders the plan beside the account', () => {
-    // planLabel could be correct and still never be wired into a row.
+  it('renders the plan badge with no email, since the badge is not private', () => {
+    // The flag gates the address, not the plan: "Max 20×" says nothing about
+    // who owns the seat, and it is the field that explains why one seat's
+    // week is four times the other's.
     const out = renderProfiles([
       { profile: 'vvs', email: 'a@b.test', plan: 'Max 20×', limits: [] },
     ]);
+
+    expect(out).toContain('vvs (Max 20×)');
+    expect(out).not.toContain('a@b.test');
+  });
+
+  it('renders the plan beside the account', () => {
+    // planLabel could be correct and still never be wired into a row.
+    const out = renderProfiles(
+      [{ profile: 'vvs', email: 'a@b.test', plan: 'Max 20×', limits: [] }],
+      { showEmails: true }
+    );
 
     expect(out).toContain('vvs (a@b.test · Max 20×)');
   });
