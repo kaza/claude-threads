@@ -166,7 +166,14 @@ export class MessageManager {
   private readonly turnMarker: TurnMarkerSettings;
   /** A scheduled (timer) flush that is still writing; the result flush waits for it. */
   private flushInFlight: Promise<void> | null = null;
-  /** Turns completed by this manager; part of the marker payload. Resets with the manager. */
+  /**
+   * Turns completed by this manager; part of the marker payload. It climbs
+   * for the life of the manager and is deliberately NOT reset by a Claude
+   * respawn (`!cd`, a worktree switch, `!permissions interactive`): the chat
+   * session is the same one, and restarting the count would emit a
+   * `{session, turn}` pair the consumer has already seen. It is per-process,
+   * not persisted — see docs/turn-marker-spec.md § turn is not durable.
+   */
   private turn = 0;
 
   // Session reference for direct access to Claude CLI, logger, etc.
@@ -528,9 +535,15 @@ export class MessageManager {
    * Handle flush operation
    */
   private async handleFlushOp(op: FlushOp, ctx: ExecutorContext): Promise<void> {
-    // Cancel any pending scheduled flush, and let one already writing finish
-    if (this.flushInFlight) await this.flushInFlight.catch(() => undefined);
+    // Cancel any pending scheduled flush, and let one already writing finish.
+    // Cancel FIRST: `await` yields the event loop, so a timer armed while an
+    // earlier flush was still running would fire during the wait and start a
+    // second flush — and cancelling afterwards is a no-op on a timer that has
+    // already run. That reopens the overlap this await exists to close, and
+    // the marker lands on a post the late flush then supersedes (Gemini
+    // review).
     this.cancelScheduledFlush();
+    if (this.flushInFlight) await this.flushInFlight.catch(() => undefined);
 
     // Execute the flush
     await this.contentExecutor.executeFlush(op, ctx);
@@ -1517,7 +1530,8 @@ export class MessageManager {
    */
   reset(): void {
     this.cancelScheduledFlush();
-    this.turn = 0;
+    // `turn` is deliberately not reset here — see its declaration. reset()
+    // runs from dispose(), where the manager is being discarded anyway.
     this.toolStartTimes.clear();
     this.taskTracker.clear();
     this.contentExecutor.reset();
