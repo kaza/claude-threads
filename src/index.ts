@@ -829,6 +829,11 @@ async function startWithoutDaemon() {
         overhead: {
           sessionHeader: resolveOverheadVisibility(dmConfig.sessionHeader, `dm[${dmConfig.id}].sessionHeader`),
           stickyMessage: 'hidden',
+          // `addPlatform` takes a Partial<PlatformOverhead>, so the required-
+          // field compiler net does not reach this site: every per-platform
+          // dial has to be listed here by hand or it silently reverts to its
+          // default. This one call site has now dropped four of them.
+          lifecycle: resolveOverheadVisibility(dmConfig.lifecycle, `dm[${dmConfig.id}].lifecycle`),
           // A derived DM config spreads its parent, so the parent's tool
           // settings carry over unless the DM entry overrides them — all four
           // fields, including the details dir and URL.
