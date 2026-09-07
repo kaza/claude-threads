@@ -545,13 +545,20 @@ export class MessageManager {
     this.cancelScheduledFlush();
     if (this.flushInFlight) await this.flushInFlight.catch(() => undefined);
 
+    // Counted before the flush, which can throw. The counter tracks turns
+    // that HAPPENED, not turns that were successfully marked — a turn with no
+    // reply post already increments without emitting anything. Leaving the
+    // number unadvanced when a flush fails would reuse it on the next turn
+    // and hide the loss, where a gap tells the reader a turn went missing
+    // (CodeRabbit review).
+    if (op.reason === 'result') this.turn++;
+
     // Execute the flush
     await this.contentExecutor.executeFlush(op, ctx);
 
     if (op.reason === 'result') {
       // The turn's post now exists (if it ever will): deliver the tool details.
       await this.toolActivityExecutor?.afterResultFlush(ctx);
-      this.turn++;
       await this.markTurnComplete(ctx, op.resultOk !== false);
     }
   }
