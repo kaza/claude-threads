@@ -51,6 +51,7 @@ export {
   resolveOverheadVisibility,
   DEFAULT_TOOL_ACTIVITY,
   DEFAULT_TOOL_DETAILS_DIR,
+  resolvePlatformTools,
   resolveToolActivity,
   DEFAULT_TURN_MARKER,
   TURN_COMPLETE_EVENT_TYPE,

@@ -21,7 +21,7 @@ import {
   type PlatformInstanceConfig,
   type PermissionMode,
   type OverheadVisibility,
-  resolveToolActivity,
+  resolvePlatformTools,
   resolveTurnMarker,
 } from './config/index.js';
 import type { CliArgs } from './config/index.js';
@@ -769,12 +769,7 @@ async function startWithoutDaemon() {
           platformConfig.lifecycle,
           `platforms[${platformConfig.id}].lifecycle`,
         ),
-        tools: resolveToolActivity(
-          platformConfig.toolActivity,
-          platformConfig.toolDetails,
-          `platforms[${platformConfig.id}]`,
-          { dir: platformConfig.toolDetailsDir, url: platformConfig.toolDetailsUrl },
-        ),
+        tools: resolvePlatformTools(platformConfig, `platforms[${platformConfig.id}]`),
         turnMarker: resolveTurnMarker(
           platformConfig.turnMarker,
           platformConfig.turnMarkerEmoji,
@@ -835,9 +830,10 @@ async function startWithoutDaemon() {
           sessionHeader: resolveOverheadVisibility(dmConfig.sessionHeader, `dm[${dmConfig.id}].sessionHeader`),
           stickyMessage: 'hidden',
           // A derived DM config spreads its parent, so the parent's tool
-          // settings carry over unless the DM entry overrides them.
-          tools: resolveToolActivity(dmConfig.toolActivity, dmConfig.toolDetails, `dm[${dmConfig.id}]`),
-          // A derived DM config spreads its parent, so the parent's marker carries over.
+          // settings carry over unless the DM entry overrides them — all four
+          // fields, including the details dir and URL.
+          tools: resolvePlatformTools(dmConfig, `dm[${dmConfig.id}]`),
+          // Same for the parent's turn marker.
           turnMarker: resolveTurnMarker(dmConfig.turnMarker, dmConfig.turnMarkerEmoji, dmConfig.type, `dm[${dmConfig.id}]`),
         },
         memory: resolveMemoryConfig(
@@ -947,12 +943,7 @@ async function startWithoutDaemon() {
             sessionHeader: 'minimal',
             stickyMessage: 'hidden',
             lifecycle: resolveOverheadVisibility(chConfig.lifecycle, `chan[${chConfig.id}].lifecycle`),
-            tools: resolveToolActivity(
-              chConfig.toolActivity,
-              chConfig.toolDetails,
-              `chan[${chConfig.id}]`,
-              { dir: chConfig.toolDetailsDir, url: chConfig.toolDetailsUrl },
-            ),
+            tools: resolvePlatformTools(chConfig, `chan[${chConfig.id}]`),
           },
           memory: resolveMemoryConfig(chConfig.memory, `chan[${chConfig.id}].memory`),
           routinesEnabled: resolveRoutinesEnabled(chConfig.routines, `chan[${chConfig.id}].routines`),

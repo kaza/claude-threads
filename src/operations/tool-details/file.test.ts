@@ -31,11 +31,11 @@ describe('file sink', () => {
     const sink = createFileSink({ dir, urlBase: 'https://agents.example.com/tool-details', platformId: 'slack-vvs', sessionId: 'slack-vvs:1.23' });
 
     await sink.append(start('t1', 'Bash `ls -la <dir>`'), ctx);
-    expect(sink.link()).toBe('https://agents.example.com/tool-details/slack-vvs/slack-vvs_3A1_2E23/1.html');
+    expect(sink.link()).toBe('https://agents.example.com/tool-details/slack-vvs/slack-vvs_003A1_002E23/1.html');
     await sink.append(end('t1'), ctx);
     await sink.turnEnded(ctx);
 
-    const page = await readFile(join(dir, 'slack-vvs', 'slack-vvs_3A1_2E23', '1.html'), 'utf8');
+    const page = await readFile(join(dir, 'slack-vvs', 'slack-vvs_003A1_002E23', '1.html'), 'utf8');
     expect(page).toContain('Bash `ls -la &lt;dir&gt;`');
     expect(page).toContain('↳ ✓ (5s)');
     expect(page).not.toContain('<dir>');
@@ -82,12 +82,45 @@ describe('file sink', () => {
     expect(second).not.toContain('Read before reset');
   });
 
+  it('a resumed session continues the turn numbering instead of overwriting turn 1 (Codex review)', async () => {
+    // Every bot restart resumes sessions, and each resume builds a NEW sink
+    // for the same session id. Starting at turn 1 unconditionally overwrote
+    // the first page and dropped every earlier turn from the index.
+    const { ctx } = ctxWith();
+    const first = createFileSink({ dir, platformId: 'p', sessionId: 's' });
+    await first.append(start('t1', 'Read before restart'), ctx);
+    await first.turnEnded(ctx);
+
+    const resumed = createFileSink({ dir, platformId: 'p', sessionId: 's' });
+    await resumed.append(start('t2', 'Read after restart'), ctx);
+    await resumed.turnEnded(ctx);
+
+    expect(await readFile(join(dir, 'p', 's', '1.html'), 'utf8')).toContain('Read before restart');
+    const second = await readFile(join(dir, 'p', 's', '2.html'), 'utf8');
+    expect(second).toContain('Read after restart');
+    expect(second).not.toContain('Read before restart');
+    const index = await readFile(join(dir, 'p', 's', 'index.html'), 'utf8');
+    expect(index).toContain('href="1.html"');
+    expect(index).toContain('href="2.html"');
+  });
+
   it('path segments are injective and cannot escape: distinct ids never share a directory, dot segments cannot occur', () => {
     expect(safeSegment('a:b')).not.toBe(safeSegment('a/b'));
-    expect(safeSegment('..')).toBe('_2E_2E');
-    expect(safeSegment('.')).toBe('_2E');
+    expect(safeSegment('..')).toBe('_002E_002E');
+    expect(safeSegment('.')).toBe('_002E');
     expect(safeSegment('plain-id')).toBe('plain-id');
     expect(safeSegment('')).toBe('_');
+    // Variable-width hex had no delimiter, so ' AC' and '€' both encoded to
+    // `_20AC` (Anne's review). Four hex digits per code unit fixes it.
+    expect(safeSegment(' AC')).toBe('_0020AC');
+    expect(safeSegment('€')).toBe('_20AC');
+    expect(safeSegment('€')).not.toBe(safeSegment(' AC'));
+    expect(safeSegment('\u{1F600}')).toBe('_D83D_DE00');
+    expect(safeSegment('\u{1F600}')).not.toBe(safeSegment('\u{1F601}'));
+    // Lone surrogates stay distinct. Encoding to UTF-8 instead would map
+    // every one of them to the same replacement bytes.
+    expect(safeSegment('\uD800')).toBe('_D800');
+    expect(safeSegment('\uD800')).not.toBe(safeSegment('\uDC00'));
   });
 
   it('pages and their directory are private to the daemon user', async () => {

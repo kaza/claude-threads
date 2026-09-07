@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { resolveToolActivity } from './types.js';
+import { resolvePlatformTools, resolveToolActivity } from './types.js';
+import type { PlatformInstanceConfig } from './types.js';
 
 describe('resolveToolActivity', () => {
   test('omitted means full with no details, exactly today\'s behaviour', () => {
@@ -30,11 +31,50 @@ describe('resolveToolActivity', () => {
     expect(() => resolveToolActivity('summary', 'file', 'p', { url: 'https://' })).toThrow('p.toolDetailsUrl');
     expect(() => resolveToolActivity('summary', 'file', 'p', { url: 'ftp://agents.example.com/x' })).toThrow('p.toolDetailsUrl');
     expect(() => resolveToolActivity('summary', 'file', 'p', { url: 'https://agents.example.com/x?y=1' })).toThrow('p.toolDetailsUrl');
+    // An EMPTY delimiter parses to an empty search/hash, so the property
+    // check passed it — and the appended path then lands inside the query or
+    // fragment, so the browser fetches the base and every link 404s (Codex).
+    expect(() => resolveToolActivity('summary', 'file', 'p', { url: 'https://agents.example.com/x?' })).toThrow('p.toolDetailsUrl');
+    expect(() => resolveToolActivity('summary', 'file', 'p', { url: 'https://agents.example.com/x#' })).toThrow('p.toolDetailsUrl');
     expect(() => resolveToolActivity('summary', 'file', 'p', { dir: '' })).toThrow('p.toolDetailsDir');
   });
 
   test('dir or url without file is a config error', () => {
     expect(() => resolveToolActivity('summary', 'thread', 'p', { url: 'https://x' })).toThrow('only meaningful with toolDetails file');
     expect(() => resolveToolActivity(undefined, undefined, 'p', { dir: '/x' })).toThrow('only meaningful with toolDetails file');
+  });
+});
+
+describe('resolvePlatformTools', () => {
+  // The DM-discovery call site passed only activity+details, so a parent with
+  // `toolDetails: file` produced DM instances writing to the DEFAULT directory
+  // with no link on the summary line (Anne's review). This has been the same
+  // class of bug three times, so both call sites now read the four fields off
+  // one config object instead of listing arguments — and the parameter is the
+  // whole PlatformInstanceConfig, so a stripped object does not compile.
+  const base: PlatformInstanceConfig = {
+    id: 'p', type: 'mattermost', displayName: 'P',
+    url: 'https://mm.test', token: 'tok', channelId: 'c', botName: 'bot',
+  } as PlatformInstanceConfig;
+
+  test('reads all four tool fields off the config, so no call site can drop half', () => {
+    expect(resolvePlatformTools({
+      ...base,
+      toolActivity: 'summary',
+      toolDetails: 'file',
+      toolDetailsDir: '/srv/details',
+      toolDetailsUrl: 'https://agents.example.com/tool-details',
+    }, 'dm[x]')).toEqual({
+      activity: 'summary',
+      details: 'file',
+      dir: '/srv/details',
+      url: 'https://agents.example.com/tool-details',
+    });
+  });
+
+  test('an absent tool config is still full/none, and field paths still name the entry', () => {
+    expect(resolvePlatformTools(base, 'dm[x]')).toEqual({ activity: 'full', details: 'none' });
+    expect(() => resolvePlatformTools({ ...base, toolActivity: 'summary', toolDetailsDir: '/x' }, 'dm[x]'))
+      .toThrow('dm[x].toolDetailsDir');
   });
 });

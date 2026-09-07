@@ -125,12 +125,40 @@ export function resolveToolActivity(
   return { ...resolved, dir: (dir as string | undefined) ?? DEFAULT_TOOL_DETAILS_DIR, url: url as string | undefined };
 }
 
+/**
+ * The tool dials for one platform entry, read off the config object rather
+ * than passed as four arguments. A derived DM config spreads its parent, so a
+ * call site that lists only some of the fields silently drops the rest —
+ * which is how DM instances ended up writing to the default details directory
+ * with no link on the summary line (Anne's review on #535). Same class of bug
+ * as #529's; one reader means no call site can drop half.
+ *
+ * It takes the whole `PlatformInstanceConfig` deliberately. With the four
+ * fields as an optional-property shape, `{}` and `{ toolActivity, toolDetails }`
+ * both type-check — which is exactly the bug — so the type would document the
+ * intent without enforcing it (Codex review).
+ */
+export function resolvePlatformTools(
+  config: PlatformInstanceConfig,
+  fieldPath: string,
+): ToolActivitySettings {
+  return resolveToolActivity(config.toolActivity, config.toolDetails, fieldPath, {
+    dir: config.toolDetailsDir,
+    url: config.toolDetailsUrl,
+  });
+}
+
 function isHttpUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
+    // A base that paths get appended to: no query, no fragment. Checked on
+    // the RAW string, because `https://x/details?` and `https://x/details#`
+    // parse to an empty search/hash and would pass a property check — while
+    // the appended path lands inside the query or fragment and every link
+    // silently resolves to the base instead (Codex review).
+    if (/[?#]/.test(value)) return false;
     const parsed = new URL(value);
-    // A base that paths get appended to: no query, no fragment.
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname !== '' && parsed.search === '' && parsed.hash === '';
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname !== '';
   } catch {
     return false;
   }

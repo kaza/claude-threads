@@ -221,6 +221,28 @@ Two PRs so each stands alone:
   turn's summary then edited the abandoned reply and its details threaded
   under it: the *same* bug, one layer down. `abandonHeaderTurn()` releases
   the other half.
+- **"Injective" is a claim, and ASCII tests do not check it.** `safeSegment`
+  used variable-width hex with no delimiter, so `' AC'` and `'€'` both
+  produced `_20AC`. The first fix — encode per UTF-8 byte — traded one
+  collision for a quieter one: `TextEncoder` maps *every* unpaired surrogate
+  to the same replacement bytes, so `'\uD800'` and `'\uDC00'` would have
+  collided on `_EF_BF_BD`. Fixed width per code unit (`_XXXX`) is what the
+  claim actually needs. Two reviewers found the second collision
+  independently; neither found it from the tests, which is the point — the
+  tests were still ASCII.
+- **A per-session sink is not per-session state.** Every resume built a fresh
+  file sink for the same session id, and it started at turn 1 — overwriting
+  the first page and rebuilding the index from only the turns it had written,
+  which unlinked all the earlier ones. The turn counter now continues from
+  what is on disk and the index is listed from disk.
+- **The DM-discovery call site has now dropped per-platform settings three
+  times** (memory/routines/watches, #529's, and this PR's details dir + URL).
+  The derived config spreads its parent, so the fields are always *there*; it
+  is the reader that lists a subset. `resolvePlatformTools(config, path)`
+  takes the whole `PlatformInstanceConfig`, so there is no argument list to
+  under-fill and a stripped object literal fails to compile. An all-optional
+  parameter shape would have documented the intent without enforcing it — it
+  accepts `{}` — which is what I shipped first.
 - **A retry needs to know what was attempted, not what was confirmed.**
   `headerBody` advanced only on a successful update, so a lost response left
   it stale — and the new header re-render then overwrote the post with the
